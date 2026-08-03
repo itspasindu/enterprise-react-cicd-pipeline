@@ -117,31 +117,25 @@ pm2 save
 
 ## 🔄 CI/CD Pipeline
 
-The pipeline runs 7 stages:
+The pipeline runs 6 stages:
 
 ```
 1. Code Quality      → ESLint, Prettier, TypeScript checks
 2. Security Scan     → npm audit, TruffleHog, CodeQL, Trivy
-3. Unit Tests        → Vitest with coverage reporting
+3. Unit Tests        → Vitest with coverage report artifact
 4. Build             → Production build + bundle analysis
 5. E2E Tests         → Playwright across multiple browsers
 6. Deploy Staging    → Sync to EC2, build, and start with PM2
-7. Deploy Production → Manual approval and PM2-based rollout
 ```
 
 ### Required GitHub Secrets
 
-| Secret                 | Description                        |
-| ---------------------- | ---------------------------------- |
-| `SSH_PRIVATE_KEY`      | SSH key for staging server         |
-| `SSH_PRIVATE_KEY_PROD` | SSH key for production server      |
-| `STAGING_HOST`         | Staging server IP/hostname         |
-| `STAGING_USER`         | Staging SSH username               |
-| `PROD_HOST`            | Production server IP/hostname      |
-| `PROD_USER`            | Production SSH username            |
-| `VITE_API_URL`         | API endpoint URL                   |
-| `SLACK_WEBHOOK_URL`    | Slack notifications (optional)     |
-| `CODECOV_TOKEN`        | Codecov coverage upload (optional) |
+| Secret            | Description                |
+| ----------------- | -------------------------- |
+| `SSH_PRIVATE_KEY` | SSH key for staging server |
+| `STAGING_HOST`    | Staging server IP/hostname |
+| `STAGING_USER`    | Staging SSH username       |
+| `VITE_API_URL`    | API endpoint URL           |
 
 ## 📊 Available Scripts
 

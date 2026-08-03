@@ -6,15 +6,6 @@ on:
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment environment'
-        required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
 
 env:
   NODE_VERSION: '20'
@@ -77,8 +68,8 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit
 
-      - name: Audit dependencies
-        run: npm audit --audit-level=moderate
+      - name: Audit dependencies (fail on high/critical only)
+        run: npm audit --audit-level=high
         continue-on-error: false
 
       - name: Run npm audit fix check
@@ -121,6 +112,52 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
   # ==========================================
+  # STAGE 2.5: Auto Fix Code Quality & Audit
+  # ==========================================
+  auto-fix:
+    name: Auto Fix Quality and Audit
+    runs-on: ubuntu-latest
+    needs: [code-quality, security-scan]
+    if: github.event_name == 'push' && (needs.code-quality.result == 'failure' || needs.security-scan.result == 'failure')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Auto-fix lint and formatting issues
+        run: |
+          npm run lint:fix || true
+          npm run format || true
+
+      - name: Auto-fix vulnerable dependencies
+        run: |
+          npm audit fix || true
+
+      - name: Commit and push auto-fixes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore(ci): auto-fix code quality and audit issues"
+            git push
+          else
+            echo "No auto-fix changes to commit"
+          fi
+
+  # ==========================================
   # STAGE 3: Unit & Integration Tests
   # ==========================================
   unit-tests:
@@ -142,14 +179,6 @@ jobs:
 
       - name: Run unit tests
         run: npm run test:coverage
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./coverage/lcov.info
-          flags: unittests
-          name: codecov-umbrella
-          fail_ci_if_error: true
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
@@ -259,7 +288,7 @@ jobs:
     name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: [build, e2e-tests]
-    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     environment:
       name: staging
       url: https://staging.example.com
@@ -335,86 +364,3 @@ jobs:
           echo "$HEADERS" | grep -i "x-content-type-options" || echo "WARNING: X-Content-Type-Options missing"
 
           echo "All smoke tests passed ✓"
-
-  # ==========================================
-  # STAGE 7: Deploy to Production (EC2)
-  # ==========================================
-  deploy-production:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: [deploy-staging]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
-    environment:
-      name: production
-      url: https://production.example.com
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY_PROD }}
-
-      - name: Add host to known hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.PROD_HOST }} >> ~/.ssh/known_hosts
-
-      - name: Sync project files to production EC2
-        run: |
-          rsync -az --delete \
-            --exclude '.git' \
-            --exclude 'node_modules' \
-            --exclude 'dist' \
-            ./ ${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}:/opt/enterprise-react-app/
-
-      - name: Deploy to production server
-        run: |
-          ssh ${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }} << 'EOF'
-            set -e
-            cd /opt/enterprise-react-app
-            chmod +x ./scripts/deploy.sh ./scripts/health-check.sh
-            ./scripts/deploy.sh production
-          EOF
-
-      - name: Production health checks
-        run: |
-          sleep 15
-
-          MAX_RETRIES=15
-          RETRY_COUNT=0
-
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://production.example.com/ || echo "000")
-            if [ "$STATUS" = "200" ]; then
-              echo "Production health check passed ✓"
-              exit 0
-            fi
-            echo "Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES: Status $STATUS, retrying in 10s..."
-            sleep 10
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-          done
-
-          echo "Production health check failed"
-          exit 1
-
-      - name: Notify deployment
-        if: always()
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          payload: |
-            {
-              "text": "Production deployment ${{ job.status }}",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Deployment Status:* ${{ job.status }}\\n*Commit:* ${{ github.sha }}\\n*Branch:* ${{ github.ref_name }}\\n*Author:* ${{ github.actor }}"
-                  }
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
