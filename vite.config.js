@@ -60,9 +60,20 @@ export default defineConfig(({ mode }) => ({
     },
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          utils: ['axios', 'zustand', 'react-query'],
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
+              return 'vendor'
+            }
+
+            if (id.includes('axios') || id.includes('zustand') || id.includes('react-query')) {
+              return 'utils'
+            }
+
+            return 'vendor'
+          }
+
+          return undefined
         },
       },
     },
