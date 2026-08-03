@@ -27,10 +27,7 @@ class ErrorBoundary extends Component {
             <p className="text-slate-400 mb-6">
               We apologize for the inconvenience. Please try refreshing the page.
             </p>
-            <button
-              onClick={() => window.location.reload()}
-              className="btn-primary"
-            >
+            <button onClick={() => window.location.reload()} className="btn-primary">
               Refresh Page
             </button>
             {import.meta.env.DEV && (

@@ -49,9 +49,9 @@ function About() {
         <div className="card">
           <h2 className="text-xl font-semibold mb-4">CI/CD Pipeline</h2>
           <p className="text-slate-400 leading-relaxed">
-            The pipeline includes automated linting, formatting checks, unit tests,
-            integration tests, E2E tests, security scans, build verification, and
-            automated deployment to staging and production environments with approval gates.
+            The pipeline includes automated linting, formatting checks, unit tests, integration
+            tests, E2E tests, security scans, build verification, and automated deployment to
+            staging and production environments with approval gates.
           </p>
         </div>
       </div>
