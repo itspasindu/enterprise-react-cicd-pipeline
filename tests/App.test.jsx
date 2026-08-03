@@ -7,13 +7,16 @@ import App from '../src/App'
 
 const createWrapper = () => {
   const queryClient = new QueryClient()
-  return ({ children }) => (
+  const TestProviders = ({ children }) => (
     <HelmetProvider>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>{children}</BrowserRouter>
       </QueryClientProvider>
     </HelmetProvider>
   )
+
+  TestProviders.displayName = 'TestProviders'
+  return TestProviders
 }
 
 describe('App', () => {

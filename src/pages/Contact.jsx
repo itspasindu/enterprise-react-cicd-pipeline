@@ -8,7 +8,6 @@ function Contact() {
   const handleSubmit = (e) => {
     e.preventDefault()
     // In production, send to API
-    console.log('Form submitted:', formData)
     setSubmitted(true)
     setTimeout(() => setSubmitted(false), 3000)
     setFormData({ name: '', email: '', message: '' })
