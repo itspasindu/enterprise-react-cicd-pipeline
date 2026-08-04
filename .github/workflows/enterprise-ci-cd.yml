@@ -327,8 +327,8 @@ jobs:
           ssh ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'EOF'
             if [ -d "/opt/enterprise-react-app" ]; then
               echo "Creating backup of current deployment..."
-              rm -rf /opt/enterprise-react-app_backup
-              cp -a /opt/enterprise-react-app /opt/enterprise-react-app_backup
+              sudo rm -rf /opt/enterprise-react-app_backup
+              sudo cp -a /opt/enterprise-react-app /opt/enterprise-react-app_backup
             else
               echo "No existing deployment found to backup."
             fi
@@ -400,8 +400,8 @@ jobs:
           ssh ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'EOF'
             if [ -d "/opt/enterprise-react-app_backup" ]; then
               echo "Restoring from backup..."
-              rm -rf /opt/enterprise-react-app
-              mv /opt/enterprise-react-app_backup /opt/enterprise-react-app
+              sudo rm -rf /opt/enterprise-react-app
+              sudo mv /opt/enterprise-react-app_backup /opt/enterprise-react-app
               cd /opt/enterprise-react-app
               
               echo "Restarting application with previous version..."
