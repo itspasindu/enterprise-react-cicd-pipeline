@@ -41,3 +41,4 @@ vite.svg
 .npm/
 .pnpm-store/
 .eslintcache
+playwright.config.js
