@@ -308,7 +308,6 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     environment:
       name: staging
-      url: http://${{ secrets.STAGING_HOST }}:4173
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
