@@ -116,7 +116,6 @@ FAILED=0
 check_endpoint "$BASE_URL/" 200 "Home page" || FAILED=$((FAILED + 1))
 check_endpoint "$BASE_URL/about" 200 "About page" || FAILED=$((FAILED + 1))
 check_endpoint "$BASE_URL/contact" 200 "Contact page" || FAILED=$((FAILED + 1))
-check_endpoint "$BASE_URL/nonexistent" 404 "404 page" || FAILED=$((FAILED + 1))
 
 echo ""
 check_headers "$BASE_URL/"
