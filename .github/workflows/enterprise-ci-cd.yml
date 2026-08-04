@@ -308,7 +308,7 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     environment:
       name: staging
-      url: https://staging.example.com
+      url: http://${{ secrets.STAGING_HOST }}:4173
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -349,7 +349,7 @@ jobs:
           RETRY_COUNT=0
 
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging.example.com/ || echo "000")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${{ secrets.STAGING_HOST }}:4173/" || echo "000")
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed ✓"
               exit 0
@@ -366,7 +366,7 @@ jobs:
         run: |
           # Check all pages load correctly
           for page in "/" "/about" "/contact"; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://staging.example.com$page" || echo "000")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${{ secrets.STAGING_HOST }}:4173$page" || echo "000")
             if [ "$STATUS" != "200" ]; then
               echo "Page $page returned status $STATUS"
               exit 1
@@ -375,7 +375,7 @@ jobs:
           done
 
           # Check security headers
-          HEADERS=$(curl -sI "https://staging.example.com/")
+          HEADERS=$(curl -sI "http://${{ secrets.STAGING_HOST }}:4173/")
           echo "$HEADERS" | grep -i "content-security-policy" || echo "WARNING: CSP header missing"
           echo "$HEADERS" | grep -i "x-frame-options" || echo "WARNING: X-Frame-Options missing"
           echo "$HEADERS" | grep -i "x-content-type-options" || echo "WARNING: X-Content-Type-Options missing"
