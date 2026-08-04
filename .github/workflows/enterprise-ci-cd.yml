@@ -322,6 +322,18 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Create backup for rollback
+        run: |
+          ssh ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'EOF'
+            if [ -d "/opt/enterprise-react-app" ]; then
+              echo "Creating backup of current deployment..."
+              rm -rf /opt/enterprise-react-app_backup
+              cp -a /opt/enterprise-react-app /opt/enterprise-react-app_backup
+            else
+              echo "No existing deployment found to backup."
+            fi
+          EOF
+
       - name: Sync project files to staging EC2
         run: |
           rsync -az --delete \
@@ -380,3 +392,24 @@ jobs:
           echo "$HEADERS" | grep -i "x-content-type-options" || echo "WARNING: X-Content-Type-Options missing"
 
           echo "All smoke tests passed ✓"
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment or tests failed. Initiating rollback..."
+          ssh ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'EOF'
+            if [ -d "/opt/enterprise-react-app_backup" ]; then
+              echo "Restoring from backup..."
+              rm -rf /opt/enterprise-react-app
+              mv /opt/enterprise-react-app_backup /opt/enterprise-react-app
+              cd /opt/enterprise-react-app
+              
+              echo "Restarting application with previous version..."
+              pm2 delete "enterprise-react-app" >/dev/null 2>&1 || true
+              pm2 start "npm run start -- --host 0.0.0.0 --port 4173" --name "enterprise-react-app"
+              pm2 save
+              echo "Rollback complete."
+            else
+              echo "No backup found. Cannot rollback."
+            fi
+          EOF
