@@ -15,7 +15,7 @@ function Home() {
           <h1 className="text-5xl md:text-7xl font-bold mb-6 text-gradient">Enterprise React</h1>
           <p className="text-xl text-slate-400 max-w-2xl mx-auto mb-8">
             A production-ready React application built with Vite, featuring enterprise-grade CI/CD,
-            security hardening, and performance optimization.
+            
           </p>
           <div className="flex gap-4 justify-center">
             <Link to="/about" className="btn-primary">
