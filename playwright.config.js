@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const remoteBaseURL = process.env.E2E_BASE_URL
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
@@ -12,7 +14,7 @@ export default defineConfig({
     ['junit', { outputFile: 'playwright-report/junit.xml' }],
   ],
   use: {
-    baseURL: 'http://localhost:4173',
+    baseURL: remoteBaseURL || 'http://localhost:4173',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'on-first-retry',
@@ -39,10 +41,14 @@ export default defineConfig({
       use: { ...devices['iPhone 12'] },
     },
   ],
-  webServer: {
-    command: 'npm run preview',
-    url: 'http://localhost:4173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120000,
-  },
+  ...(remoteBaseURL
+    ? {}
+    : {
+        webServer: {
+          command: 'npm run preview',
+          url: 'http://localhost:4173',
+          reuseExistingServer: !process.env.CI,
+          timeout: 120000,
+        },
+      }),
 })
