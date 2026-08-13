@@ -198,14 +198,21 @@ jobs:
           retention-days: 7
 
   # ==========================================
-  # STAGE 4: Build Verification
-  # VITE_API_URL comes from the "ci" GitHub Environment.
+  # STAGE 4: Build once → SBOM → artifact → attestation
+  # Exact dist/ is reused by E2E and staging deploy (no rebuild).
   # ==========================================
   build:
     name: Build & Bundle Analysis
     runs-on: ubuntu-latest
     needs: [code-quality, security-scan, unit-tests]
     environment: ci
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -219,7 +226,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit
 
-      - name: Build application
+      - name: Build application (once)
         run: npm run build
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
@@ -244,23 +251,64 @@ jobs:
           fi
           echo "Build verification passed ✓"
 
-      - name: Upload build artifact
+      - name: Set artifact metadata
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=app-dist-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cyclonedx.json
+          upload-artifact: false
+
+      - name: Package immutable release bundle
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${{ steps.meta.outputs.short_sha }}"
+          mkdir -p release
+          # Immutable tarball of the exact build output
+          tar -czf "release/app-dist-${SHORT_SHA}.tar.gz" -C dist .
+          cp sbom.cyclonedx.json "release/sbom-${SHORT_SHA}.cyclonedx.json"
+          (
+            cd release
+            sha256sum "app-dist-${SHORT_SHA}.tar.gz" "sbom-${SHORT_SHA}.cyclonedx.json" > SHA256SUMS
+          )
+          echo "Packaged release:"
+          ls -lah release/
+
+      - name: Upload dist artifact (for E2E + deploy)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: build-artifact
           path: dist/
-          retention-days: 7
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload SBOM + release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}-bundle
+          path: release/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: release/app-dist-${{ steps.meta.outputs.short_sha }}.tar.gz
 
   # ==========================================
-  # STAGE 5: E2E Tests
+  # STAGE 5: E2E against the exact build artifact
   # ==========================================
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
     needs: [build]
-    # Staging secrets are used to hit the already-deployed original site
-    # (no extra Playwright spec files). Staging has no approval gate.
-    environment: staging
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -277,29 +325,23 @@ jobs:
       - name: Install Playwright
         run: npx playwright install --with-deps
 
-      - name: Check original website load
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-        run: |
-          set -euo pipefail
-          if [ -z "${STAGING_HOST}" ]; then
-            echo "::error::STAGING_HOST is required on the staging Environment to check the original website."
-            exit 1
-          fi
-          URL="http://${STAGING_HOST}:4173/"
-          echo "Checking original website: ${URL}"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$URL" || echo "000")
-          if [ "$STATUS" != "200" ]; then
-            echo "Original website did not load (HTTP ${STATUS})"
-            exit 1
-          fi
-          echo "Original website loaded ✓ (HTTP ${STATUS})"
+      - name: Download exact build artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: build-artifact
+          path: dist/
 
-      - name: Run E2E tests
+      - name: Verify artifact is present
+        run: |
+          test -f dist/index.html
+          echo "E2E will run against artifact from build job (${{ needs.build.outputs.short_sha }})"
+          du -sh dist/
+
+      - name: Run E2E tests (local preview of artifact)
         run: npm run test:e2e
         env:
           CI: true
-          E2E_BASE_URL: http://${{ secrets.STAGING_HOST }}:4173
+          # Intentionally unset E2E_BASE_URL so Playwright serves ./dist via vite preview
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -311,8 +353,7 @@ jobs:
 
   # ==========================================
   # STAGE 6: Deploy to Staging (EC2)
-  # Secrets are Environment-scoped (staging), not repository-wide.
-  # SSH uses pinned known_hosts (no ssh-keyscan TOFU).
+  # Deploys the exact attested build artifact (no remote rebuild).
   # ==========================================
   deploy-staging:
     name: Deploy to Staging
@@ -324,6 +365,18 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Download exact build artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: build-artifact
+          path: dist/
+
+      - name: Verify prebuilt dist
+        run: |
+          test -f dist/index.html
+          echo "Deploying artifact ${{ needs.build.outputs.short_sha }}"
+          du -sh dist/
 
       - name: Setup SSH agent
         uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
@@ -343,7 +396,6 @@ jobs:
             echo "Verify fingerprints out-of-band, then store the lines as the Environment secret."
             exit 1
           fi
-          # Normalize newlines and write pinned host keys only (no live keyscan).
           printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" | sed 's/\r$//' > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
           echo "Pinned known_hosts entries:"
@@ -365,7 +417,7 @@ jobs:
             fi
           EOF
 
-      - name: Sync project files to staging EC2
+      - name: Sync app + prebuilt dist to staging EC2
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
@@ -374,10 +426,13 @@ jobs:
             -e "ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts" \
             --exclude '.git' \
             --exclude 'node_modules' \
-            --exclude 'dist' \
+            --exclude 'coverage' \
+            --exclude 'playwright-report' \
+            --exclude 'test-results' \
+            --exclude 'release' \
             ./ "${STAGING_USER}@${STAGING_HOST}:/opt/enterprise-react-app/"
 
-      - name: Deploy to staging server
+      - name: Deploy prebuilt artifact on staging
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
@@ -387,7 +442,7 @@ jobs:
             set -e
             cd /opt/enterprise-react-app
             chmod +x ./scripts/deploy.sh ./scripts/health-check.sh
-            ./scripts/deploy.sh staging
+            USE_PREBUILT_DIST=true ./scripts/deploy.sh staging
           EOF
 
       - name: Run health checks

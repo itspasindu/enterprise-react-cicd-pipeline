@@ -129,9 +129,9 @@ The pipeline runs only on **push to `main`** (including after a merge) plus manu
 2. Security Scan     → npm audit, TruffleHog, CodeQL, Trivy
 2.5 Fix Decision     → Developer chooses auto fix or manual fix (no silent auto-fix)
 3. Unit Tests        → Vitest with coverage report artifact
-4. Build             → Production build + bundle analysis
-5. E2E Tests         → Playwright across multiple browsers
-6. Deploy Staging    → Auto-deploy to staging EC2 after E2E passes
+4. Build once        → dist + SBOM + attested release bundle
+5. E2E Tests         → Playwright against the exact build artifact
+6. Deploy Staging    → Promote prebuilt dist to staging EC2 (no remote rebuild)
 7. Failure Tickets   → Auto-create GitHub Issues when stages fail
 8. Wiki Report       → Publish final pipeline report to GitHub Wiki
 ```
@@ -150,6 +150,18 @@ The pipeline runs only on **push to `main`** (including after a merge) plus manu
 | No automatic `npm audit fix` | Audit **reports** only; dependency upgrades require a reviewed PR |
 | Environment secrets | Deploy/build secrets on GitHub Environments (`ci`, `staging`) |
 | Secure SSH | Pinned `STAGING_SSH_KNOWN_HOSTS` + `StrictHostKeyChecking=yes` (no live `ssh-keyscan`) |
+
+### Phase 2 — Artifact (build once)
+
+| Control | Implementation |
+| --- | --- |
+| Build once | Single `npm run build` on CI; staging uses `USE_PREBUILT_DIST=true` |
+| SBOM | CycloneDX JSON via `anchore/sbom-action` |
+| Upload artifact | `build-artifact` (`dist/`) + `app-dist-<sha>-bundle` (tarball, SBOM, SHA256SUMS) |
+| Attestation | GitHub Artifact Attestations (`actions/attest-build-provenance`) on the dist tarball |
+| E2E on artifact | Playwright downloads `build-artifact` and previews local `dist/` (not staging URL) |
+
+View attestations on the repo **Actions** run or **Deployments / Attestations** UI after a green build.
 
 ### Developer fix approval (auto vs manual)
 

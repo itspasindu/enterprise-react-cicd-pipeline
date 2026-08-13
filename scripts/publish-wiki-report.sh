@@ -133,8 +133,10 @@ cat >> "${REPORT_PAGE}.md" <<EOF
 
 When produced by the run, these are available from the Actions UI:
 
+- \`build-artifact\` — exact production \`dist/\` (used by E2E + staging deploy)
+- \`app-dist-<sha>-bundle\` — immutable tarball + CycloneDX SBOM + SHA256SUMS
+- Build provenance attestation on \`app-dist-<sha>.tar.gz\`
 - \`coverage-report\` — unit test coverage
-- \`build-artifact\` — production \`dist/\`
 - \`playwright-report\` — E2E HTML report
 
 ## Related links
