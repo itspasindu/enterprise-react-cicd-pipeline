@@ -3,16 +3,19 @@ set -euo pipefail
 
 # ==========================================
 # Enterprise Deployment Script
+# Supports promoting a CI prebuilt dist (build once).
 # ==========================================
 
 ENVIRONMENT="${1:-staging}"
 PORT="${PORT:-4173}"
 APP_NAME="${APP_NAME:-enterprise-react-app}"
+USE_PREBUILT_DIST="${USE_PREBUILT_DIST:-false}"
 
 echo "=========================================="
 echo "Deploying to: $ENVIRONMENT"
 echo "App Name: $APP_NAME"
 echo "Port: $PORT"
+echo "Use prebuilt dist: $USE_PREBUILT_DIST"
 echo "=========================================="
 
 if [ "$ENVIRONMENT" != "staging" ] && [ "$ENVIRONMENT" != "production" ]; then
@@ -31,8 +34,16 @@ fi
 echo "Installing dependencies..."
 npm ci --prefer-offline --no-audit
 
-echo "Building application..."
-npm run build
+if [ "$USE_PREBUILT_DIST" = "true" ]; then
+    if [ ! -f "dist/index.html" ]; then
+        echo "Error: USE_PREBUILT_DIST=true but dist/index.html is missing"
+        exit 1
+    fi
+    echo "Using CI prebuilt dist artifact (skipping remote build)"
+else
+    echo "Building application on server..."
+    npm run build
+fi
 
 if ! command -v pm2 >/dev/null 2>&1; then
     echo "Installing PM2 globally..."
