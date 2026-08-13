@@ -2,9 +2,9 @@ name: Enterprise CI/CD Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -15,9 +15,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ==========================================
-  # STAGE 1: Code Quality & Validation
-  # ==========================================
   code-quality:
     name: Code Quality Checks
     runs-on: ubuntu-latest
@@ -129,50 +126,54 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
   # ==========================================
-  # STAGE 2.5: Auto Fix Code Quality & Audit
+  # STAGE 2.5: Await developer fix choice
+  # Auto-fix is NOT applied automatically.
+  # Developers choose on the failure Issue:
+  #   - label "fix/auto"   → Developer Fix Choice workflow runs auto-fix
+  #   - label "fix/manual" → developer fixes locally / via PR
+  # Or run workflow "Developer Fix Choice" manually (workflow_dispatch).
   # ==========================================
-  auto-fix:
-    name: Auto Fix Quality and Audit
+  await-fix-decision:
+    name: Await Developer Fix Decision
     runs-on: ubuntu-latest
     needs: [code-quality, security-scan]
-    if: github.event_name == 'push' && (needs.code-quality.result == 'failure' || needs.security-scan.result == 'failure')
+    if: |
+      always() &&
+      !cancelled() &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' &&
+      (needs.code-quality.result == 'failure' || needs.security-scan.result == 'failure')
     permissions:
-      contents: write
+      issues: write
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci --prefer-offline --no-audit
-
-      - name: Auto-fix lint and formatting issues
+      - name: Post fix-choice guidance on / create failure ticket
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          CODE_QUALITY: ${{ needs.code-quality.result }}
+          SECURITY_SCAN: ${{ needs.security-scan.result }}
+          UNIT_TESTS: skipped
+          BUILD: skipped
+          E2E_TESTS: skipped
+          DEPLOY_STAGING: skipped
         run: |
-          npm run lint:fix || true
-          npm run format || true
+          chmod +x ./scripts/create-failure-ticket.sh
+          ./scripts/create-failure-ticket.sh
 
-      - name: Auto-fix vulnerable dependencies
+      - name: Remind that pipeline is waiting for developer choice
         run: |
-          npm audit fix || true
-
-      - name: Commit and push auto-fixes
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore(ci): auto-fix code quality and audit issues"
-            git push
-          else
-            echo "No auto-fix changes to commit"
-          fi
+          echo "::notice::Quality/security failed. Choose a fix path on the GitHub Issue:"
+          echo "  - Add label 'fix/auto' for automated lint/format/audit fix + commit"
+          echo "  - Add label 'fix/manual' to confirm you will fix manually"
+          echo "Or run Actions → 'Developer Fix Choice' → Run workflow."
 
   # ==========================================
   # STAGE 3: Unit & Integration Tests
@@ -413,3 +414,104 @@ jobs:
               echo "No backup found. Cannot rollback."
             fi
           EOF
+
+  # ==========================================
+  # STAGE 7: Create GitHub Issue tickets on failure
+  # ==========================================
+  create-failure-ticket:
+    name: Create Failure Ticket
+    runs-on: ubuntu-latest
+    needs:
+      - code-quality
+      - security-scan
+      - unit-tests
+      - build
+      - e2e-tests
+      - deploy-staging
+    if: |
+      always() &&
+      !cancelled() &&
+      github.ref == 'refs/heads/main' &&
+      (
+        needs.code-quality.result == 'failure' ||
+        needs.security-scan.result == 'failure' ||
+        needs.unit-tests.result == 'failure' ||
+        needs.build.result == 'failure' ||
+        needs.e2e-tests.result == 'failure' ||
+        needs.deploy-staging.result == 'failure'
+      )
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Issue for failed pipeline stages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          CODE_QUALITY: ${{ needs.code-quality.result }}
+          SECURITY_SCAN: ${{ needs.security-scan.result }}
+          UNIT_TESTS: ${{ needs.unit-tests.result }}
+          BUILD: ${{ needs.build.result }}
+          E2E_TESTS: ${{ needs.e2e-tests.result }}
+          DEPLOY_STAGING: ${{ needs.deploy-staging.result }}
+        run: |
+          chmod +x ./scripts/create-failure-ticket.sh
+          ./scripts/create-failure-ticket.sh
+
+  # ==========================================
+  # STAGE 8: Publish final report to GitHub Wiki
+  # ==========================================
+  publish-wiki-report:
+    name: Publish Wiki Report
+    runs-on: ubuntu-latest
+    needs:
+      - code-quality
+      - security-scan
+      - await-fix-decision
+      - unit-tests
+      - build
+      - e2e-tests
+      - deploy-staging
+      - create-failure-ticket
+    if: |
+      always() &&
+      !cancelled() &&
+      github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Publish final pipeline report to Wiki
+        env:
+          # Prefer a PAT/fine-grained token with Wiki write access.
+          # GITHUB_TOKEN often cannot push to *.wiki.git.
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          CODE_QUALITY: ${{ needs.code-quality.result }}
+          SECURITY_SCAN: ${{ needs.security-scan.result }}
+          AWAIT_FIX_DECISION: ${{ needs.await-fix-decision.result }}
+          UNIT_TESTS: ${{ needs.unit-tests.result }}
+          BUILD: ${{ needs.build.result }}
+          E2E_TESTS: ${{ needs.e2e-tests.result }}
+          DEPLOY_STAGING: ${{ needs.deploy-staging.result }}
+          FAILURE_TICKET: ${{ needs.create-failure-ticket.result }}
+        run: |
+          chmod +x ./scripts/publish-wiki-report.sh
+          ./scripts/publish-wiki-report.sh
+

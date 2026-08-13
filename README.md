@@ -7,11 +7,16 @@ A production-ready, enterprise-grade React application built with Vite, featurin
 ```
 enterprise-react-app/
 ├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   └── ci-failure.yml         # CI failure ticket template
 │   └── workflows/
-│       └── enterprise-ci-cd.yml    # Full CI/CD pipeline
+│       ├── enterprise-ci-cd.yml    # Full CI/CD pipeline
+│       └── developer-fix-choice.yml # Developer picks auto vs manual fix
 ├── scripts/
 │   ├── health-check.sh             # Comprehensive health check script
-│   └── deploy.sh                   # EC2 deployment and process automation
+│   ├── deploy.sh                   # EC2 deployment and process automation
+│   ├── create-failure-ticket.sh    # Opens GitHub Issues on CI failures
+│   └── publish-wiki-report.sh      # Publishes final CI report to Wiki
 ├── src/
 │   ├── components/                 # Reusable components
 │   ├── pages/                      # Route pages
@@ -117,25 +122,64 @@ pm2 save
 
 ## 🔄 CI/CD Pipeline
 
-The pipeline runs 6 stages:
+The pipeline runs only on the **`main`** branch (plus manual `workflow_dispatch`) and includes:
 
 ```
 1. Code Quality      → ESLint, Prettier, TypeScript checks
 2. Security Scan     → npm audit, TruffleHog, CodeQL, Trivy
+2.5 Fix Decision     → Developer chooses auto fix or manual fix (no silent auto-fix)
 3. Unit Tests        → Vitest with coverage report artifact
 4. Build             → Production build + bundle analysis
 5. E2E Tests         → Playwright across multiple browsers
 6. Deploy Staging    → Sync to EC2, build, and start with PM2
+7. Failure Tickets   → Auto-create GitHub Issues when stages fail
+8. Wiki Report       → Publish final pipeline report to GitHub Wiki
 ```
+
+### Developer fix approval (auto vs manual)
+
+When **Code Quality** or **Security** fails on `main`, CI **does not** auto-fix by itself. A failure Issue is opened and a developer must choose:
+
+| Choice | How | Result |
+| --- | --- | --- |
+| **Auto fix** | Add label `fix/auto` on the Issue, or run **Developer Fix Choice** → `auto` | Runs `lint:fix`, Prettier, `npm audit fix`, commits to `main` |
+| **Manual fix** | Add label `fix/manual`, or run **Developer Fix Choice** → `manual` | CI leaves code unchanged; developer fixes via local commit/PR |
+
+Workflow: `.github/workflows/developer-fix-choice.yml`
+
+### Automated failure tickets (GitHub Issues)
+
+When a stage fails on `main`, the pipeline opens a **GitHub Issue** ticket (not Wiki — Issues are the GitHub ticket system).
+
+- Labels: `ci-failure`, `bug`, `needs-triage` (+ `security` for security-scan failures)
+- Fix labels: `fix/auto`, `fix/manual`, `fix/auto-applied`, `fix/manual-in-progress`
+- Deduplicates open tickets for the same failing stage set (adds a comment instead)
+- Manual template: `.github/ISSUE_TEMPLATE/ci-failure.yml`
+- Optional: add issues to a **GitHub Project** board for triage (`Issues` → `Projects`)
+
+### Final pipeline report (GitHub Wiki)
+
+After every `main` pipeline finishes, stage 8 publishes a complete report to the **GitHub Wiki**:
+
+- Per-run page: `Pipeline-Report-YYYY-MM-DD-run-<id>`
+- Index page: `Pipeline-Reports` (newest first, last 50 runs)
+- `Home` updated with a link to the latest report
+
+**Setup required**
+
+1. Enable Wikis: repo **Settings → General → Features → Wikis**
+2. Create any first wiki page once (so `*.wiki.git` exists)
+3. Add secret **`WIKI_TOKEN`**: a classic PAT (`repo`) or fine-grained token with **Contents: Read and write** for this repository (needed to push to the wiki; `GITHUB_TOKEN` usually cannot)
 
 ### Required GitHub Secrets
 
-| Secret            | Description                |
-| ----------------- | -------------------------- |
-| `SSH_PRIVATE_KEY` | SSH key for staging server |
-| `STAGING_HOST`    | Staging server IP/hostname |
-| `STAGING_USER`    | Staging SSH username       |
-| `VITE_API_URL`    | API endpoint URL           |
+| Secret            | Description                                      |
+| ----------------- | ------------------------------------------------ |
+| `SSH_PRIVATE_KEY` | SSH key for staging server                       |
+| `STAGING_HOST`    | Staging server IP/hostname                       |
+| `STAGING_USER`    | Staging SSH username                             |
+| `VITE_API_URL`    | API endpoint URL                                 |
+| `WIKI_TOKEN`      | Token with wiki write access (for report publish) |
 
 ## 📊 Available Scripts
 

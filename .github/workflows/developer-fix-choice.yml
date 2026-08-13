@@ -1,0 +1,189 @@
+name: Developer Fix Choice
+
+# Developers choose how to remediate quality/security CI failures:
+#   1) On the failure Issue, add label "fix/auto" or "fix/manual"
+#   2) Or run this workflow manually (Actions → Developer Fix Choice)
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      fix_mode:
+        description: Choose fix strategy
+        required: true
+        type: choice
+        options:
+          - auto
+          - manual
+        default: manual
+      issue_number:
+        description: Related GitHub Issue number (optional)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: developer-fix-choice-${{ github.event.issue.number || github.event.inputs.issue_number || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  resolve-choice:
+    name: Resolve Fix Choice
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && (
+        github.event.label.name == 'fix/auto' ||
+        github.event.label.name == 'fix/manual'
+      ))
+    outputs:
+      mode: ${{ steps.choice.outputs.mode }}
+      issue_number: ${{ steps.choice.outputs.issue_number }}
+    steps:
+      - name: Determine selected mode
+        id: choice
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LABEL_NAME: ${{ github.event.label.name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          INPUT_MODE: ${{ github.event.inputs.fix_mode }}
+          INPUT_ISSUE: ${{ github.event.inputs.issue_number }}
+        run: |
+          if [ "$EVENT_NAME" = "issues" ]; then
+            if [ "$LABEL_NAME" = "fix/auto" ]; then
+              echo "mode=auto" >> "$GITHUB_OUTPUT"
+            else
+              echo "mode=manual" >> "$GITHUB_OUTPUT"
+            fi
+            echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=${INPUT_MODE}" >> "$GITHUB_OUTPUT"
+            echo "issue_number=${INPUT_ISSUE}" >> "$GITHUB_OUTPUT"
+          fi
+
+  auto-fix:
+    name: Apply Auto Fix
+    runs-on: ubuntu-latest
+    needs: [resolve-choice]
+    if: needs.resolve-choice.outputs.mode == 'auto'
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Auto-fix lint and formatting
+        run: |
+          npm run lint:fix || true
+          npm run format || true
+
+      - name: Auto-fix vulnerable dependencies
+        run: |
+          npm audit fix || true
+
+      - name: Commit and push auto-fixes
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "chore(ci): auto-fix after developer approval"
+            git push origin main
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Auto-fix committed and pushed to main."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No auto-fix changes were available to commit."
+          fi
+
+      - name: Update related Issue
+        if: needs.resolve-choice.outputs.issue_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ needs.resolve-choice.outputs.issue_number }}
+          CHANGED: ${{ steps.commit.outputs.changed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create "fix/auto-applied" --color "0E8A16" --description "Auto-fix was applied by CI" 2>/dev/null || true
+          if [ "$CHANGED" = "true" ]; then
+            BODY="### Developer chose **auto fix**
+
+          Auto-fix was applied and pushed to \`main\`.
+
+          - Fix run: ${RUN_URL}
+          - A new CI pipeline should start from the auto-fix commit.
+          - Close this issue once \`main\` is green."
+          else
+            BODY="### Developer chose **auto fix**
+
+          Auto-fix ran but produced **no file changes**.
+
+          - Fix run: ${RUN_URL}
+          - Please switch to **manual fix** (\`fix/manual\`) or investigate the logs."
+          fi
+          gh issue comment "$ISSUE" --repo "${{ github.repository }}" --body "$BODY"
+          gh issue edit "$ISSUE" --repo "${{ github.repository }}" \
+            --add-label "fix/auto-applied" \
+            --remove-label "fix/auto" \
+            --remove-label "needs-triage" || true
+
+  manual-fix:
+    name: Acknowledge Manual Fix
+    runs-on: ubuntu-latest
+    needs: [resolve-choice]
+    if: needs.resolve-choice.outputs.mode == 'manual'
+    steps:
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "fix/manual" --color "1D76DB" --description "Developer will fix manually" 2>/dev/null || true
+          gh label create "fix/manual-in-progress" --color "5319E7" --description "Manual fix in progress" 2>/dev/null || true
+
+      - name: Comment manual-fix checklist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ needs.resolve-choice.outputs.issue_number }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          BODY="### Developer chose **manual fix**
+
+          Thanks @${ACTOR} — auto-fix will **not** run. Please fix on the developer side:
+
+          1. Checkout \`main\` (or a short-lived fix branch)
+          2. Reproduce with \`npm run lint\`, \`npm run format:check\`, \`npm audit --audit-level=high\`, etc.
+          3. Apply and verify the fix locally
+          4. Push to \`main\` (or open a PR into \`main\`)
+          5. Confirm CI is green, then close the failure issue
+
+          Approval run: ${RUN_URL}"
+
+          if [ -n "$ISSUE" ]; then
+            gh issue comment "$ISSUE" --repo "${{ github.repository }}" --body "$BODY"
+            gh issue edit "$ISSUE" --repo "${{ github.repository }}" \
+              --add-label "fix/manual-in-progress" \
+              --remove-label "needs-triage" || true
+            gh issue edit "$ISSUE" --repo "${{ github.repository }}" --add-assignee "$ACTOR" || true
+          else
+            echo "$BODY"
+            echo "::notice::Manual fix selected via workflow_dispatch (no issue number provided)."
+          fi
