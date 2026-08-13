@@ -122,7 +122,7 @@ pm2 save
 
 ## 🔄 CI/CD Pipeline
 
-The pipeline runs only on the **`main`** branch (plus manual `workflow_dispatch`) and includes:
+The pipeline runs only on **push to `main`** (including after a merge) plus manual `workflow_dispatch`. Pushes and PRs on other branches (e.g. `features/test`) do **not** start this pipeline.
 
 ```
 1. Code Quality      → ESLint, Prettier, TypeScript checks
@@ -131,10 +131,25 @@ The pipeline runs only on the **`main`** branch (plus manual `workflow_dispatch`
 3. Unit Tests        → Vitest with coverage report artifact
 4. Build             → Production build + bundle analysis
 5. E2E Tests         → Playwright across multiple browsers
-6. Deploy Staging    → Sync to EC2, build, and start with PM2
+6. Deploy Staging    → Auto-deploy to staging EC2 after E2E passes
 7. Failure Tickets   → Auto-create GitHub Issues when stages fail
 8. Wiki Report       → Publish final pipeline report to GitHub Wiki
 ```
+
+### Staging vs production
+
+- **Staging:** deploys automatically on `main` after all gates pass (no manual approval).
+- **Production:** server exists but is **not** deployed by this pipeline yet. Add a `production` environment + manual gate later when ready.
+
+### Phase 1 — Security hardening
+
+| Control | Implementation |
+| --- | --- |
+| Pin Actions to SHA | All `uses:` pinned to full commit SHAs (with version comments) |
+| Least privilege | Workflow default `permissions: contents: read`; jobs elevate only when needed |
+| No automatic `npm audit fix` | Audit **reports** only; dependency upgrades require a reviewed PR |
+| Environment secrets | Deploy/build secrets on GitHub Environments (`ci`, `staging`) |
+| Secure SSH | Pinned `STAGING_SSH_KNOWN_HOSTS` + `StrictHostKeyChecking=yes` (no live `ssh-keyscan`) |
 
 ### Developer fix approval (auto vs manual)
 
@@ -142,7 +157,7 @@ When **Code Quality** or **Security** fails on `main`, CI **does not** auto-fix 
 
 | Choice | How | Result |
 | --- | --- | --- |
-| **Auto fix** | Add label `fix/auto` on the Issue, or run **Developer Fix Choice** → `auto` | Runs `lint:fix`, Prettier, `npm audit fix`, commits to `main` |
+| **Auto fix** | Add label `fix/auto` on the Issue, or run **Developer Fix Choice** → `auto` | Runs `lint:fix` + Prettier, commits to `main` (no `npm audit fix`) |
 | **Manual fix** | Add label `fix/manual`, or run **Developer Fix Choice** → `manual` | CI leaves code unchanged; developer fixes via local commit/PR |
 
 Workflow: `.github/workflows/developer-fix-choice.yml`
@@ -169,17 +184,41 @@ After every `main` pipeline finishes, stage 8 publishes a complete report to the
 
 1. Enable Wikis: repo **Settings → General → Features → Wikis**
 2. Create any first wiki page once (so `*.wiki.git` exists)
-3. Add secret **`WIKI_TOKEN`**: a classic PAT (`repo`) or fine-grained token with **Contents: Read and write** for this repository (needed to push to the wiki; `GITHUB_TOKEN` usually cannot)
+3. Add repository secret **`WIKI_TOKEN`**: PAT with wiki write access (`GITHUB_TOKEN` usually cannot push to the wiki)
 
-### Required GitHub Secrets
+### Required GitHub Environments & secrets
 
-| Secret            | Description                                      |
-| ----------------- | ------------------------------------------------ |
-| `SSH_PRIVATE_KEY` | SSH key for staging server                       |
-| `STAGING_HOST`    | Staging server IP/hostname                       |
-| `STAGING_USER`    | Staging SSH username                             |
-| `VITE_API_URL`    | API endpoint URL                                 |
-| `WIKI_TOKEN`      | Token with wiki write access (for report publish) |
+Create under **Settings → Environments**.
+
+#### Environment `ci` (Build job)
+
+| Secret | Description |
+| --- | --- |
+| `VITE_API_URL` | API URL baked into the production build |
+
+#### Environment `staging` (Deploy job)
+
+| Secret | Description |
+| --- | --- |
+| `SSH_PRIVATE_KEY` | Deploy SSH private key |
+| `STAGING_HOST` | Staging server hostname/IP |
+| `STAGING_USER` | SSH username |
+| `STAGING_SSH_KNOWN_HOSTS` | Pinned host-key lines (required) |
+
+#### Repository secret
+
+| Secret | Description |
+| --- | --- |
+| `WIKI_TOKEN` | PAT with wiki write access (report publish) |
+
+**Pinned known_hosts (verify fingerprints out-of-band, then store):**
+
+```bash
+ssh-keyscan -t ed25519,rsa YOUR_STAGING_HOST
+```
+
+Paste the output into Environment secret `STAGING_SSH_KNOWN_HOSTS` on **staging**.  
+Remove old copies of deploy/build secrets from **repository** secrets after migrating to Environments.
 
 ## 📊 Available Scripts
 
@@ -221,6 +260,6 @@ MIT License - see LICENSE file for details.
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit changes (`git commit -m 'Add amazing feature'`)
 4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+5. Open a Pull Request into `main`
 
-The CI pipeline will automatically run all checks on your PR.
+The Enterprise CI/CD pipeline runs only after the PR is **merged to `main`** (or on manual `workflow_dispatch`), not on feature-branch pushes/PRs.
