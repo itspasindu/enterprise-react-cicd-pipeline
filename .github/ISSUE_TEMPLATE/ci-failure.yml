@@ -1,0 +1,67 @@
+name: CI/CD Failure Ticket
+description: Track a pipeline failure detected by the Enterprise CI/CD workflow
+title: "[CI Failure]: "
+labels: ["ci-failure", "bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for pipeline failures. The CI workflow also creates these tickets automatically on `main`.
+
+  - type: dropdown
+    id: failed-stage
+    attributes:
+      label: Failed stage
+      description: Which pipeline stage failed?
+      multiple: true
+      options:
+        - Code Quality Checks
+        - Security Analysis
+        - Unit Tests
+        - Build & Bundle Analysis
+        - E2E Tests
+        - Deploy to Staging
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: workflow-run
+    attributes:
+      label: Workflow run URL
+      description: Link to the failed GitHub Actions run
+      placeholder: https://github.com/org/repo/actions/runs/123456
+    validations:
+      required: false
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Failure summary
+      description: What failed and any key error messages?
+      placeholder: ESLint reported unused variables in src/pages/Home.jsx...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: Local commands or steps that reproduce the failure
+      value: |
+        1. Checkout the failing commit
+        2. Run `npm ci`
+        3. Run the failing script (lint / test / build / e2e)
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Resolution checklist
+      options:
+        - label: Chose fix path (fix/auto or fix/manual)
+        - label: Root cause identified
+        - label: Fix merged to main
+        - label: CI run is green on main
+        - label: Related duplicate tickets closed
