@@ -25,7 +25,7 @@ test.describe('Navigation', () => {
 
   test('homepage loads correctly', async ({ page }) => {
     await expect(page).toHaveTitle(/Enterprise React/)
-    await expect(page.locator('h1')).toContainText('Enterprise React')
+    await expect(page.locator('h1')).toContainText('React Version 2')
   })
 
   test('navigation to About page works', async ({ page }) => {
