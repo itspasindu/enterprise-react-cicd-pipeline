@@ -1,11 +1,15 @@
 name: Enterprise CI/CD Pipeline
 
 on:
+  # Run only after commits land on main (including merges).
+  # Feature branches (e.g. features/test) and PRs do not trigger this pipeline.
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+
+# Least privilege by default; jobs elevate only when required.
+permissions:
+  contents: read
 
 env:
   NODE_VERSION: '20'
@@ -20,12 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -54,10 +58,10 @@ jobs:
       security-events: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -67,24 +71,17 @@ jobs:
 
       - name: Audit dependencies (fail on high/critical only)
         run: npm audit --audit-level=high
-        continue-on-error: false
 
-      - name: Run npm audit fix check
+      # Report only — never auto-mutate lockfile/dependencies in CI
+      - name: Report npm audit fix impact (dry-run, non-blocking)
+        continue-on-error: true
         run: |
-          npm audit fix --dry-run 2>&1 || true
-
-      - name: Check for secrets (pull request)
-        if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@main
-        with:
-          path: ./
-          base: ${{ github.event.pull_request.base.sha }}
-          head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --debug --only-verified
+          echo "Informational only. Dependency upgrades require a reviewed PR — CI never runs npm audit fix."
+          npm audit fix --dry-run --audit-level=high 2>&1 || true
 
       - name: Check for secrets (push)
         if: github.event_name == 'push'
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
         with:
           path: ./
           base: ${{ github.event.before }}
@@ -93,27 +90,27 @@ jobs:
 
       - name: Check for secrets (manual)
         if: github.event_name == 'workflow_dispatch'
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
         with:
           path: ./
           extra_args: --debug --only-verified
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@1b549b9259bda1cb5ddde3b41741a82a2d15a841 # v3.28.13
         with:
           languages: javascript
           queries: security-extended,security-and-quality
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@1b549b9259bda1cb5ddde3b41741a82a2d15a841 # v3.28.13
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@1b549b9259bda1cb5ddde3b41741a82a2d15a841 # v3.28.13
         with:
           category: '/language:javascript'
 
       - name: Run Trivy vulnerability scanner in repo mode
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -121,17 +118,12 @@ jobs:
           output: 'trivy-results.sarif'
 
       - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@1b549b9259bda1cb5ddde3b41741a82a2d15a841 # v3.28.13
         with:
           sarif_file: 'trivy-results.sarif'
 
   # ==========================================
   # STAGE 2.5: Await developer fix choice
-  # Auto-fix is NOT applied automatically.
-  # Developers choose on the failure Issue:
-  #   - label "fix/auto"   → Developer Fix Choice workflow runs auto-fix
-  #   - label "fix/manual" → developer fixes locally / via PR
-  # Or run workflow "Developer Fix Choice" manually (workflow_dispatch).
   # ==========================================
   await-fix-decision:
     name: Await Developer Fix Decision
@@ -148,7 +140,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Post fix-choice guidance on / create failure ticket
         env:
@@ -171,7 +163,7 @@ jobs:
       - name: Remind that pipeline is waiting for developer choice
         run: |
           echo "::notice::Quality/security failed. Choose a fix path on the GitHub Issue:"
-          echo "  - Add label 'fix/auto' for automated lint/format/audit fix + commit"
+          echo "  - Add label 'fix/auto' for automated lint/format fix + commit (no npm audit fix)"
           echo "  - Add label 'fix/manual' to confirm you will fix manually"
           echo "Or run Actions → 'Developer Fix Choice' → Run workflow."
 
@@ -184,10 +176,10 @@ jobs:
     needs: [code-quality]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -199,7 +191,7 @@ jobs:
         run: npm run test:coverage
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-report
           path: coverage/
@@ -207,17 +199,19 @@ jobs:
 
   # ==========================================
   # STAGE 4: Build Verification
+  # VITE_API_URL comes from the "ci" GitHub Environment.
   # ==========================================
   build:
     name: Build & Bundle Analysis
     runs-on: ubuntu-latest
     needs: [code-quality, security-scan, unit-tests]
+    environment: ci
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -251,7 +245,7 @@ jobs:
           echo "Build verification passed ✓"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: build-artifact
           path: dist/
@@ -266,10 +260,10 @@ jobs:
     needs: [build]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -281,7 +275,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: build-artifact
           path: dist/
@@ -292,7 +286,7 @@ jobs:
           CI: true
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: playwright-report
@@ -301,6 +295,8 @@ jobs:
 
   # ==========================================
   # STAGE 6: Deploy to Staging (EC2)
+  # Secrets are Environment-scoped (staging), not repository-wide.
+  # SSH uses pinned known_hosts (no ssh-keyscan TOFU).
   # ==========================================
   deploy-staging:
     name: Deploy to Staging
@@ -311,21 +307,39 @@ jobs:
       name: staging
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.9.0
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Add host to known hosts
+      - name: Configure pinned SSH known_hosts
+        env:
+          STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts
+          chmod 700 ~/.ssh
+          if [ -z "${STAGING_SSH_KNOWN_HOSTS}" ]; then
+            echo "::error::STAGING_SSH_KNOWN_HOSTS is required on the staging Environment."
+            echo "Generate with: ssh-keyscan -t ed25519,rsa YOUR_STAGING_HOST"
+            echo "Verify fingerprints out-of-band, then store the lines as the Environment secret."
+            exit 1
+          fi
+          # Normalize newlines and write pinned host keys only (no live keyscan).
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" | sed 's/\r$//' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          echo "Pinned known_hosts entries:"
+          awk '{print $1, $2}' ~/.ssh/known_hosts
 
       - name: Create backup for rollback
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
         run: |
-          ssh ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'EOF'
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "${STAGING_USER}@${STAGING_HOST}" << 'EOF'
             if [ -d "/opt/enterprise-react-app" ]; then
               echo "Creating backup of current deployment..."
               sudo rm -rf /opt/enterprise-react-app_backup
@@ -336,16 +350,24 @@ jobs:
           EOF
 
       - name: Sync project files to staging EC2
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
         run: |
           rsync -az --delete \
+            -e "ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts" \
             --exclude '.git' \
             --exclude 'node_modules' \
             --exclude 'dist' \
-            ./ ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }}:/opt/enterprise-react-app/
+            ./ "${STAGING_USER}@${STAGING_HOST}:/opt/enterprise-react-app/"
 
       - name: Deploy to staging server
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
         run: |
-          ssh ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'EOF'
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "${STAGING_USER}@${STAGING_HOST}" << 'EOF'
             set -e
             cd /opt/enterprise-react-app
             chmod +x ./scripts/deploy.sh ./scripts/health-check.sh
@@ -353,6 +375,8 @@ jobs:
           EOF
 
       - name: Run health checks
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
         run: |
           echo "Waiting for deployment to stabilize..."
           sleep 15
@@ -361,7 +385,7 @@ jobs:
           RETRY_COUNT=0
 
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${{ secrets.STAGING_HOST }}:4173/" || echo "000")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${STAGING_HOST}:4173/" || echo "000")
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed ✓"
               exit 0
@@ -375,10 +399,11 @@ jobs:
           exit 1
 
       - name: Run smoke tests
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
         run: |
-          # Check all pages load correctly
           for page in "/" "/about" "/contact"; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${{ secrets.STAGING_HOST }}:4173$page" || echo "000")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${STAGING_HOST}:4173$page" || echo "000")
             if [ "$STATUS" != "200" ]; then
               echo "Page $page returned status $STATUS"
               exit 1
@@ -386,8 +411,7 @@ jobs:
             echo "Page $page: OK ($STATUS)"
           done
 
-          # Check security headers
-          HEADERS=$(curl -sI "http://${{ secrets.STAGING_HOST }}:4173/")
+          HEADERS=$(curl -sI "http://${STAGING_HOST}:4173/")
           echo "$HEADERS" | grep -i "content-security-policy" || echo "WARNING: CSP header missing"
           echo "$HEADERS" | grep -i "x-frame-options" || echo "WARNING: X-Frame-Options missing"
           echo "$HEADERS" | grep -i "x-content-type-options" || echo "WARNING: X-Content-Type-Options missing"
@@ -396,15 +420,19 @@ jobs:
 
       - name: Rollback on failure
         if: failure()
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
         run: |
           echo "Deployment or tests failed. Initiating rollback..."
-          ssh ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'EOF'
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "${STAGING_USER}@${STAGING_HOST}" << 'EOF'
             if [ -d "/opt/enterprise-react-app_backup" ]; then
               echo "Restoring from backup..."
               sudo rm -rf /opt/enterprise-react-app
               sudo mv /opt/enterprise-react-app_backup /opt/enterprise-react-app
               cd /opt/enterprise-react-app
-              
+
               echo "Restarting application with previous version..."
               pm2 delete "enterprise-react-app" >/dev/null 2>&1 || true
               pm2 start "npm run start -- --host 0.0.0.0 --port 4173" --name "enterprise-react-app"
@@ -445,7 +473,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Create GitHub Issue for failed pipeline stages
         env:
@@ -467,6 +495,7 @@ jobs:
 
   # ==========================================
   # STAGE 8: Publish final report to GitHub Wiki
+  # WIKI_TOKEN remains a repository secret (wiki is not an Environment deploy).
   # ==========================================
   publish-wiki-report:
     name: Publish Wiki Report
@@ -488,12 +517,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Publish final pipeline report to Wiki
         env:
-          # Prefer a PAT/fine-grained token with Wiki write access.
-          # GITHUB_TOKEN often cannot push to *.wiki.git.
           WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -514,4 +541,3 @@ jobs:
         run: |
           chmod +x ./scripts/publish-wiki-report.sh
           ./scripts/publish-wiki-report.sh
-
