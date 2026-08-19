@@ -1,9 +1,11 @@
 name: Enterprise CI/CD Pipeline
 
 on:
-  # Run only after commits land on main (including merges).
-  # Feature branches (e.g. features/test) and PRs do not trigger this pipeline.
+  # PR → main: quality, security, tests, build, E2E (branch protection checks)
+  # push → main: full release path including staging deploy, tickets, wiki
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -78,6 +80,15 @@ jobs:
         run: |
           echo "Informational only. Dependency upgrades require a reviewed PR — CI never runs npm audit fix."
           npm audit fix --dry-run --audit-level=high 2>&1 || true
+
+      - name: Check for secrets (pull request)
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --debug --only-verified
 
       - name: Check for secrets (push)
         if: github.event_name == 'push'
@@ -359,7 +370,9 @@ jobs:
     name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: [build, e2e-tests]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
     environment:
       name: staging
     steps:
@@ -530,6 +543,7 @@ jobs:
     if: |
       always() &&
       !cancelled() &&
+      github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       (
         needs.code-quality.result == 'failure' ||
@@ -583,6 +597,7 @@ jobs:
     if: |
       always() &&
       !cancelled() &&
+      github.event_name == 'push' &&
       github.ref == 'refs/heads/main'
     permissions:
       contents: read

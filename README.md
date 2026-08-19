@@ -122,7 +122,15 @@ pm2 save
 
 ## 🔄 CI/CD Pipeline
 
-The pipeline runs only on **push to `main`** (including after a merge) plus manual `workflow_dispatch`. Pushes and PRs on other branches (e.g. `features/test`) do **not** start this pipeline.
+> **Full documentation:** [docs/CI-CD-PIPELINE.md](docs/CI-CD-PIPELINE.md) — complete guide to all stages, security, artifacts, deployment, secrets, and troubleshooting.
+
+The pipeline runs on:
+
+- **Pull requests → `main`** — quality, security, unit tests, build, E2E (for branch protection)
+- **Push to `main`** — full release path + staging deploy + failure tickets + wiki report
+- **`workflow_dispatch`** — manual run
+
+Pushes to other branches (e.g. `features/test`) do **not** start this pipeline.
 
 ```
 1. Code Quality      → ESLint, Prettier, TypeScript checks
@@ -274,4 +282,4 @@ MIT License - see LICENSE file for details.
 4. Push to branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request into `main`
 
-The Enterprise CI/CD pipeline runs only after the PR is **merged to `main`** (or on manual `workflow_dispatch`), not on feature-branch pushes/PRs.
+The Enterprise CI/CD pipeline runs on **PRs to `main`** (checks before merge) and again on **push to `main`** after merge (deploy + reporting).
