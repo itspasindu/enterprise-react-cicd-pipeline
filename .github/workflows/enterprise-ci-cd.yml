@@ -433,13 +433,38 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "${STAGING_USER}@${STAGING_HOST}" << 'EOF'
-            if [ -d "/opt/enterprise-react-app" ]; then
-              echo "Creating backup of current deployment..."
-              sudo rm -rf /opt/enterprise-react-app_backup
-              sudo cp -a /opt/enterprise-react-app /opt/enterprise-react-app_backup
-            else
+            set -e
+            # No sudo — CI has no TTY for password prompts.
+            # Pre-create both dirs on the server owned by the deploy user (see SETUP-GUIDE).
+            APP_DIR="/opt/enterprise-react-app"
+            BACKUP_DIR="/opt/enterprise-react-app_backup"
+
+            if [ ! -d "$APP_DIR" ]; then
               echo "No existing deployment found to backup."
+              mkdir -p "$APP_DIR"
+              exit 0
             fi
+
+            if [ ! -w "$APP_DIR" ]; then
+              echo "::error::$APP_DIR is not writable by $(whoami)."
+              echo "On the server: sudo chown -R \$USER:\$USER $APP_DIR $BACKUP_DIR"
+              ls -la /opt || true
+              exit 1
+            fi
+
+            mkdir -p "$BACKUP_DIR"
+            if [ ! -w "$BACKUP_DIR" ]; then
+              echo "::error::$BACKUP_DIR is not writable by $(whoami)."
+              echo "On the server:"
+              echo "  sudo mkdir -p $APP_DIR $BACKUP_DIR"
+              echo "  sudo chown -R \$USER:\$USER $APP_DIR $BACKUP_DIR"
+              exit 1
+            fi
+
+            echo "Creating backup of current deployment..."
+            # Sync into existing backup dir (avoids creating a new dir under /opt).
+            rsync -a --delete "${APP_DIR}/" "${BACKUP_DIR}/"
+            echo "Backup complete."
           EOF
 
       - name: Sync app + prebuilt dist to staging EC2
@@ -525,8 +550,8 @@ jobs:
             "${STAGING_USER}@${STAGING_HOST}" << 'EOF'
             if [ -d "/opt/enterprise-react-app_backup" ]; then
               echo "Restoring from backup..."
-              sudo rm -rf /opt/enterprise-react-app
-              sudo mv /opt/enterprise-react-app_backup /opt/enterprise-react-app
+              # Sync backup back into app dir (no sudo; both dirs owned by deploy user).
+              rsync -a --delete /opt/enterprise-react-app_backup/ /opt/enterprise-react-app/
               cd /opt/enterprise-react-app
 
               echo "Restarting application with previous version..."
