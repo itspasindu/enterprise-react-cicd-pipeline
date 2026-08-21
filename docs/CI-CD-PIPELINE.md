@@ -2,6 +2,8 @@
 
 This document describes the full **Enterprise React CI/CD Pipeline**: how it works, every stage, security controls, artifact flow, deployment, failure handling, and setup requirements.
 
+**Related:** [SETUP-GUIDE.md](./SETUP-GUIDE.md) — complete setup from zero (server, secrets, first deploy).
+
 ---
 
 ## Table of contents
@@ -33,7 +35,7 @@ The pipeline is defined in:
 | --- | --- |
 | `.github/workflows/enterprise-ci-cd.yml` | Main CI/CD pipeline (8 stages) |
 | `.github/workflows/developer-fix-choice.yml` | Developer-approved auto vs manual fix |
-| `scripts/deploy.sh` | EC2 deploy + PM2 |
+| `scripts/deploy.sh` | Staging server deploy + PM2 (any SSH Ubuntu host) |
 | `scripts/health-check.sh` | Post-deploy validation |
 | `scripts/create-failure-ticket.sh` | GitHub Issue on failure |
 | `scripts/publish-wiki-report.sh` | Wiki report after each main run |
@@ -46,7 +48,7 @@ The pipeline is defined in:
 - **Environment-scoped secrets** — deploy/build secrets live in GitHub Environments
 - **Observable failures** — GitHub Issues + Wiki reports on `main`
 
-**Runtime stack:** Node.js 20, React 18, Vite, Vitest, Playwright, PM2 on AWS EC2 (staging).
+**Runtime stack:** Node.js 20, React 18, Vite, Vitest, Playwright, PM2 on Ubuntu staging (VMware, Oracle VM, EC2, or any SSH host).
 
 ---
 
@@ -450,9 +452,12 @@ Used by the **Deploy to Staging** job.
 | Secret | Description |
 | --- | --- |
 | `SSH_PRIVATE_KEY` | Deploy SSH private key (OpenSSH format) |
-| `STAGING_HOST` | EC2 public IP or DNS |
-| `STAGING_USER` | SSH user (`ubuntu`, `ec2-user`, etc.) |
+| `STAGING_HOST` | Public IP/DNS, **or Tailscale `100.x.y.z` / MagicDNS name** |
+| `STAGING_USER` | SSH user (`ubuntu`, `opc`, etc.) |
 | `STAGING_SSH_KNOWN_HOSTS` | Pinned host key lines |
+| `TAILSCALE_AUTHKEY` | Optional. When set, deploy joins Tailscale before SSH (private VMware/LAN) |
+
+For Tailscale setup, see [SETUP-GUIDE.md §5 Option A](./SETUP-GUIDE.md#option-a--tailscale-recommended-for-private-vmware--oracle-vm).
 
 #### Generate SSH key (browser-only EC2 access)
 

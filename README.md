@@ -55,6 +55,10 @@ enterprise-react-app/
 
 ## 🚀 Quick Start
 
+> **Complete setup guide:** [docs/SETUP-GUIDE.md](docs/SETUP-GUIDE.md) — local run, Ubuntu/VMware server, GitHub secrets, Wiki, branch protection, first deploy.
+>
+> **Pipeline reference:** [docs/CI-CD-PIPELINE.md](docs/CI-CD-PIPELINE.md) — stages, security, artifacts, troubleshooting.
+
 ### Prerequisites
 
 - Node.js >= 20.0.0
@@ -221,9 +225,10 @@ Create under **Settings → Environments**.
 | Secret | Description |
 | --- | --- |
 | `SSH_PRIVATE_KEY` | Deploy SSH private key |
-| `STAGING_HOST` | Staging server hostname/IP |
+| `STAGING_HOST` | Staging server hostname/IP (**or Tailscale IP / MagicDNS**) |
 | `STAGING_USER` | SSH username |
 | `STAGING_SSH_KNOWN_HOSTS` | Pinned host-key lines (required) |
+| `TAILSCALE_AUTHKEY` | Optional — Tailscale auth key for private VMs (skip public ports) |
 
 #### Repository secret
 
