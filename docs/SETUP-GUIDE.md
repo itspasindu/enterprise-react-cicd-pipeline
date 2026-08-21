@@ -91,11 +91,13 @@ sudo npm install -g pm2
 The pipeline deploys to **`/opt/enterprise-react-app`**.
 
 ```bash
-sudo mkdir -p /opt/enterprise-react-app
-sudo chown -R "$USER:$USER" /opt/enterprise-react-app
+sudo mkdir -p /opt/enterprise-react-app /opt/enterprise-react-app_backup
+sudo chown -R "$USER:$USER" /opt/enterprise-react-app /opt/enterprise-react-app_backup
 ```
 
 Use the same Linux user you will put in `STAGING_USER` (examples: `ubuntu`, `opc`, your login).
+
+**Important:** CI deploy does **not** use `sudo` (no interactive password). The deploy user must own these directories.
 
 ### 3.3 Optional firewall (UFW)
 
