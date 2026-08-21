@@ -128,7 +128,7 @@ Auto-fix is **paused** until a developer chooses:
 
 | Choice | How to select | What happens |
 | --- | --- | --- |
-| **Auto fix** | Add label \`fix/auto\` to this issue | CI runs \`lint:fix\`, Prettier, \`npm audit fix\`, then commits to \`main\` |
+| **Auto fix** | Add label \`fix/auto\` to this issue | CI runs \`lint:fix\` and Prettier, then commits to \`main\` (no \`npm audit fix\`) |
 | **Manual fix** | Add label \`fix/manual\` to this issue | CI does not change code; you fix locally / via PR |
 
 You can also run **Actions → Developer Fix Choice → Run workflow** and select \`auto\` or \`manual\`.

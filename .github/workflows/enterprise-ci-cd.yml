@@ -1,9 +1,11 @@
 name: Enterprise CI/CD Pipeline
 
 on:
-  # Run only after commits land on main (including merges).
-  # Feature branches (e.g. features/test) and PRs do not trigger this pipeline.
+  # PR → main: quality, security, tests, build, E2E (branch protection checks)
+  # push → main: full release path including staging deploy, tickets, wiki
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -78,6 +80,15 @@ jobs:
         run: |
           echo "Informational only. Dependency upgrades require a reviewed PR — CI never runs npm audit fix."
           npm audit fix --dry-run --audit-level=high 2>&1 || true
+
+      - name: Check for secrets (pull request)
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --debug --only-verified
 
       - name: Check for secrets (push)
         if: github.event_name == 'push'
@@ -352,16 +363,22 @@ jobs:
           retention-days: 7
 
   # ==========================================
-  # STAGE 6: Deploy to Staging (EC2)
+  # STAGE 6: Deploy to Staging
   # Deploys the exact attested build artifact (no remote rebuild).
+  # Optional Tailscale: set TAILSCALE_AUTHKEY on staging to reach private VMs.
   # ==========================================
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: [build, e2e-tests]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
     environment:
       name: staging
+    env:
+      # Secrets cannot be used in `if:`; map to env so Tailscale can be optional.
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -377,6 +394,14 @@ jobs:
           test -f dist/index.html
           echo "Deploying artifact ${{ needs.build.outputs.short_sha }}"
           du -sh dist/
+
+      # Join Tailscale when TAILSCALE_AUTHKEY is set (private VMware / LAN hosts).
+      # Leave the secret unset to skip (public IP / DNAT deploys).
+      - name: Connect to Tailscale
+        if: ${{ env.TAILSCALE_AUTHKEY != '' }}
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          authkey: ${{ env.TAILSCALE_AUTHKEY }}
 
       - name: Setup SSH agent
         uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
@@ -530,6 +555,7 @@ jobs:
     if: |
       always() &&
       !cancelled() &&
+      github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       (
         needs.code-quality.result == 'failure' ||
@@ -583,6 +609,7 @@ jobs:
     if: |
       always() &&
       !cancelled() &&
+      github.event_name == 'push' &&
       github.ref == 'refs/heads/main'
     permissions:
       contents: read
