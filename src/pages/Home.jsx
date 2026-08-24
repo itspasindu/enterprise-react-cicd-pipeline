@@ -6,7 +6,7 @@ function Home() {
     <>
       <Helmet>
         <title>Home | Enterprise React App</title>
-        <meta name="description" content="Welcome to our React application" />
+        <meta name="description" content="Welcome to our enterprise-grade React application" />
       </Helmet>
 
       <div className="space-y-12">
