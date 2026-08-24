@@ -12,8 +12,8 @@ function Home() {
       <div className="space-y-12">
         {/* Hero Section */}
         <section className="text-center py-16">
-          <h1 className="text-5xl md:text-7xl font-bold mb-6 text-gradient">React Version 2</h1>
-          <p className="text-xl text-slate-400 max-w-2xl mx-auto mb-8">enterprise-grade CI/CD</p>
+          <h1 className="text-5xl md:text-7xl font-bold mb-6 text-gradient">React+vite</h1>
+          <p className="text-xl text-slate-400 max-w-2xl mx-auto mb-8">CI/CD pipeline</p>
           <div className="flex gap-4 justify-center">
             <Link to="/about" className="btn-primary">
               Learn More
