@@ -48,9 +48,7 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-  # ==========================================
-  # STAGE 2: Security Scanning
-  # ==========================================
+
   security-scan:
     name: Security Analysis
     runs-on: ubuntu-latest
@@ -133,9 +131,7 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
-  # ==========================================
-  # STAGE 2.5: Await developer fix choice
-  # ==========================================
+
   await-fix-decision:
     name: Await Developer Fix Decision
     runs-on: ubuntu-latest
@@ -178,9 +174,7 @@ jobs:
           echo "  - Add label 'fix/manual' to confirm you will fix manually"
           echo "Or run Actions → 'Developer Fix Choice' → Run workflow."
 
-  # ==========================================
-  # STAGE 3: Unit & Integration Tests
-  # ==========================================
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -208,10 +202,7 @@ jobs:
           path: coverage/
           retention-days: 7
 
-  # ==========================================
-  # STAGE 4: Build once → SBOM → artifact → attestation
-  # Exact dist/ is reused by E2E and staging deploy (no rebuild).
-  # ==========================================
+
   build:
     name: Build & Bundle Analysis
     runs-on: ubuntu-latest
@@ -313,9 +304,7 @@ jobs:
         with:
           subject-path: release/app-dist-${{ steps.meta.outputs.short_sha }}.tar.gz
 
-  # ==========================================
-  # STAGE 5: E2E against the exact build artifact
-  # ==========================================
+
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
@@ -362,11 +351,7 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  # ==========================================
-  # STAGE 6: Deploy to Staging
-  # Deploys the exact attested build artifact (no remote rebuild).
-  # Optional Tailscale: set TAILSCALE_AUTHKEY on staging to reach private VMs.
-  # ==========================================
+
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
@@ -564,9 +549,7 @@ jobs:
             fi
           EOF
 
-  # ==========================================
-  # STAGE 7: Create GitHub Issue tickets on failure
-  # ==========================================
+
   create-failure-ticket:
     name: Create Failure Ticket
     runs-on: ubuntu-latest
@@ -615,10 +598,7 @@ jobs:
           chmod +x ./scripts/create-failure-ticket.sh
           ./scripts/create-failure-ticket.sh
 
-  # ==========================================
-  # STAGE 8: Publish final report to GitHub Wiki
-  # WIKI_TOKEN remains a repository secret (wiki is not an Environment deploy).
-  # ==========================================
+
   publish-wiki-report:
     name: Publish Wiki Report
     runs-on: ubuntu-latest
