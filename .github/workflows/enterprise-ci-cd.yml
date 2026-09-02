@@ -618,6 +618,60 @@ jobs:
           EOF
 
 
+  create-pr-failure-ticket:
+    name: Create PR Failure Ticket
+    runs-on: ubuntu-latest
+    needs:
+      - code-quality
+      - security-scan
+      - unit-tests
+      - build
+      - e2e-tests
+    if: |
+      always() &&
+      !cancelled() &&
+      github.event_name == 'pull_request' &&
+      (
+        needs.code-quality.result == 'failure' ||
+        needs.security-scan.result == 'failure' ||
+        needs.unit-tests.result == 'failure' ||
+        needs.build.result == 'failure' ||
+        needs.e2e-tests.result == 'failure'
+      )
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Create GitHub Issue for failed PR checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: pull_request
+          REF_NAME: ${{ github.head_ref }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          COMMIT_MESSAGE: ${{ github.event.pull_request.title }}
+          CODE_QUALITY: ${{ needs.code-quality.result }}
+          SECURITY_SCAN: ${{ needs.security-scan.result }}
+          UNIT_TESTS: ${{ needs.unit-tests.result }}
+          BUILD: ${{ needs.build.result }}
+          E2E_TESTS: ${{ needs.e2e-tests.result }}
+          DOCKER_BUILD_PUSH: skipped
+          DEPLOY_STAGING: skipped
+        run: |
+          chmod +x ./scripts/create-failure-ticket.sh
+          ./scripts/create-failure-ticket.sh
+
+
   create-failure-ticket:
     name: Create Failure Ticket
     runs-on: ubuntu-latest

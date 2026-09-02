@@ -14,6 +14,8 @@ source "${SCRIPT_DIR}/lib/ci-report-lib.sh"
 : "${EVENT_NAME:?EVENT_NAME is required}"
 
 RUN_ID="${RUN_ID:-}"
+PR_NUMBER="${PR_NUMBER:-}"
+PR_URL="${PR_URL:-}"
 COMMIT_MESSAGE="${COMMIT_MESSAGE:-}"
 REF_NAME="${REF_NAME:-main}"
 WORKFLOW_NAME="${WORKFLOW_NAME:-CI/CD Pipeline}"
@@ -58,10 +60,15 @@ ensure_label "ci/docker" "C2E0C6" "Docker build/push stage failure"
 ensure_label "ci/deploy" "FBCA04" "Staging deploy stage failure"
 ensure_label "priority/high" "B60205" "High priority — blocks main"
 ensure_label "priority/critical" "8B0000" "Critical — security or production path"
+ensure_label "pull-request" "5319E7" "Failure detected on a pull request check"
 
 declare -a FAILED_STAGE_KEYS=()
 declare -a FAILED_STAGE_NAMES=()
 LABELS=("ci-failure" "bug" "needs-triage" "priority/high")
+
+if [ "$EVENT_NAME" = "pull_request" ]; then
+  LABELS+=("pull-request")
+fi
 
 record_failure() {
   local result="$1"
@@ -109,10 +116,17 @@ LABELS=("${UNIQUE_LABELS[@]}")
 STAGES_CSV=$(IFS=', '; echo "${FAILED_STAGE_NAMES[*]}")
 SHORT_SHA="${SHA:0:7}"
 SEVERITY_PREFIX="[CI Failure]"
-if [ "$SECURITY_SCAN" = "failure" ]; then
+if [ "$EVENT_NAME" = "pull_request" ]; then
+  SEVERITY_PREFIX="[CI PR Failure]"
+elif [ "$SECURITY_SCAN" = "failure" ]; then
   SEVERITY_PREFIX="[CI Security Failure]"
 fi
-TITLE="${SEVERITY_PREFIX}: ${STAGES_CSV} on ${REF_NAME} (${SHORT_SHA})"
+
+if [ -n "$PR_NUMBER" ]; then
+  TITLE="${SEVERITY_PREFIX}: ${STAGES_CSV} on PR #${PR_NUMBER} (${SHORT_SHA})"
+else
+  TITLE="${SEVERITY_PREFIX}: ${STAGES_CSV} on ${REF_NAME} (${SHORT_SHA})"
+fi
 
 fetch_job_urls "$RUN_ID" "$GH_REPO"
 
@@ -160,11 +174,21 @@ fi
 COMPARE_URL="https://github.com/${GH_REPO}/commit/${SHA}"
 ARTIFACTS_URL="${RUN_URL}#artifacts"
 
+PR_ROW=""
+if [ -n "$PR_NUMBER" ]; then
+  PR_ROW="| **Pull request** | [#${PR_NUMBER}](${PR_URL}) |"
+fi
+
+SEARCH_TITLE="${STAGES_CSV}"
+if [ -n "$PR_NUMBER" ]; then
+  SEARCH_TITLE="PR #${PR_NUMBER}"
+fi
+
 EXISTING_ISSUE=$(gh issue list \
   --repo "$GH_REPO" \
   --state open \
   --label "ci-failure" \
-  --search "\"${STAGES_CSV}\" in:title" \
+  --search "\"${SEARCH_TITLE}\" in:title" \
   --json number,url \
   --jq '.[0].url // empty' 2>/dev/null || true)
 
@@ -184,6 +208,7 @@ Another run failed with the same stage(s).
 | Actor | @${ACTOR} |
 | Event | \`${EVENT_NAME}\` |
 | Failed stages | ${STAGES_CSV} |
+$(if [ -n "$PR_NUMBER" ]; then echo "| Pull request | [#${PR_NUMBER}](${PR_URL}) |"; fi)
 
 #### Failed stage checklist
 ${FAILED_CHECKLIST}
@@ -200,6 +225,50 @@ EOF
   exit 0
 fi
 
+if [ "$EVENT_NAME" = "pull_request" ]; then
+  FIX_PATH_SECTION=$(cat <<EOF
+### How to fix (pull request)
+
+Fix on branch \`${REF_NAME}\`, push to the PR, and wait for checks to re-run:
+
+\`\`\`bash
+git checkout ${REF_NAME}
+${REPRO_CMD}
+git add -A && git commit -m "fix: resolve ${STAGES_CSV}"
+git push
+\`\`\`
+
+**Pull request:** ${PR_URL:-link unavailable}
+
+Close this issue when PR checks are green.
+EOF
+)
+else
+  FIX_PATH_SECTION=$(cat <<EOF
+### Developer fix path (approval required)
+
+Auto-fix is **paused** until a developer chooses:
+
+| Choice | How to select | What happens |
+| --- | --- | --- |
+| **Auto fix** | Add label \`fix/auto\` to this issue | Runs \`lint:fix\` + Prettier, commits to \`${REF_NAME}\` (never \`npm audit fix\`) |
+| **Manual fix** | Add label \`fix/manual\` to this issue | No CI code changes; fix via local branch / PR |
+
+Or: **Actions → Developer Fix Choice → Run workflow** → select \`auto\` or \`manual\`.
+
+---
+
+### Resolution workflow
+
+1. Open the [workflow run](${RUN_URL}) and failed job logs (table above).
+2. Download artifacts (\`playwright-report\`, \`coverage-report\`, \`build-artifact\`) if relevant.
+3. Add \`fix/auto\` **or** \`fix/manual\`.
+4. Apply fix; confirm a green run on \`${REF_NAME}\`.
+5. Check off stages above and **close this issue**.
+EOF
+)
+fi
+
 BODY=$(cat <<EOF
 ## Pipeline failure report
 
@@ -214,6 +283,7 @@ BODY=$(cat <<EOF
 | **Commit** | [${SHORT_SHA}](${COMPARE_URL}) |
 | **Message** | ${COMMIT_MESSAGE:-_(not available)_} |
 | **Branch** | \`${REF_NAME}\` |
+${PR_ROW}
 | **Triggered by** | @${ACTOR} (\`${EVENT_NAME}\`) |
 | **Artifacts** | [Download from run](${ARTIFACTS_URL}) |
 
@@ -246,26 +316,7 @@ ${REPRO_CMD}
 
 ---
 
-### Developer fix path (approval required)
-
-Auto-fix is **paused** until a developer chooses:
-
-| Choice | How to select | What happens |
-| --- | --- | --- |
-| **Auto fix** | Add label \`fix/auto\` to this issue | Runs \`lint:fix\` + Prettier, commits to \`${REF_NAME}\` (never \`npm audit fix\`) |
-| **Manual fix** | Add label \`fix/manual\` to this issue | No CI code changes; fix via local branch / PR |
-
-Or: **Actions → Developer Fix Choice → Run workflow** → select \`auto\` or \`manual\`.
-
----
-
-### Resolution workflow
-
-1. Open the [workflow run](${RUN_URL}) and failed job logs (table above).
-2. Download artifacts (\`playwright-report\`, \`coverage-report\`, \`build-artifact\`) if relevant.
-3. Add \`fix/auto\` **or** \`fix/manual\`.
-4. Apply fix; confirm a green run on \`${REF_NAME}\`.
-5. Check off stages above and **close this issue**.
+${FIX_PATH_SECTION}
 
 ### References
 

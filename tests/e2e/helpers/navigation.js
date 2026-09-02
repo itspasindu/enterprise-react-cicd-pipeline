@@ -1,4 +1,4 @@
-import { NAV_LINKS, ARIA, TEST_IDS } from '../../../src/config/app-contract.js'
+import { TEST_IDS } from '../../../src/config/app-contract.js'
 
 /**
  * Cross-viewport nav helper: opens mobile menu when the toggle is visible,

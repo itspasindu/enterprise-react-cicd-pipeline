@@ -302,6 +302,8 @@ Tests run against the **exact `dist/` artifact** from Stage 4:
 **Runs on:** push to `main` only, when any required stage fails  
 **Script:** `scripts/create-failure-ticket.sh`
 
+**PR failures:** Job `Create PR Failure Ticket` runs on `pull_request` when code-quality, security, unit, build, or E2E fails. Issues are labeled `pull-request` + `ci-failure`.
+
 Creates a detailed GitHub Issue with:
 
 - Labels: `ci-failure`, `bug`, `needs-triage`, `priority/high` (+ stage labels `ci/quality`, `ci/e2e`, etc.)

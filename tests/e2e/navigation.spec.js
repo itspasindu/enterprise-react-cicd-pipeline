@@ -20,14 +20,14 @@ test.describe('Application smoke @cross-browser', () => {
   })
 
   test('home route loads', async ({ page }) => {
-    await expect(page).toHaveTitle(new RegExp(APP_NAME))
+    await expect(page).toHaveTitle(APP_NAME)
     await expectPageMarker(page, TEST_IDS.homePage)
   })
 
   for (const { path, label } of NAV_LINKS.filter(link => link.path !== ROUTES.home)) {
     test(`navigates to ${label} (${path})`, async ({ page }) => {
       await clickNavLink(page, label)
-      await expect(page).toHaveURL(new RegExp(path.replace('/', '\\/')))
+      await expect(page).toHaveURL(path)
       if (path === ROUTES.about) {
         await expectPageMarker(page, TEST_IDS.aboutPage)
       }

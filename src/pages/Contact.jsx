@@ -28,7 +28,9 @@ function Contact() {
           {submitted ? (
             <div className="text-center py-8" data-testid={TEST_IDS.contactSuccess}>
               <div className="text-5xl mb-4">✅</div>
-              <h3 className="text-xl font-semibold text-green-400">{CONTACT_FORM.successHeading}</h3>
+              <h3 className="text-xl font-semibold text-green-400">
+                {CONTACT_FORM.successHeading}
+              </h3>
               <p className="text-slate-400 mt-2">We'll get back to you soon.</p>
             </div>
           ) : (
