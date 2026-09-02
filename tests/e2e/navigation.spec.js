@@ -1,67 +1,68 @@
 import { test, expect } from '@playwright/test'
+import {
+  clickNavLink,
+  expectPageMarker,
+  NAV_LINKS,
+  TEST_IDS,
+  ROUTES,
+  CONTACT_FORM,
+  NOT_FOUND_PATH,
+  APP_NAME,
+} from './helpers/navigation.js'
 
 /**
- * Desktop nav links stay in the DOM (CSS-hidden on small viewports) while the
- * mobile menu duplicates the same labels. Prefer role + visible filters so
- * Mobile Safari does not hit strict-mode or hidden-element click timeouts.
+ * Behavior-focused E2E: asserts routes, navigation, and forms via shared
+ * app-contract.js — not marketing copy. Runs on all browser projects in CI.
  */
-async function clickNavLink(page, label) {
-  const menuButton = page.getByRole('button', { name: 'Toggle menu' })
-  
-  // If the mobile menu toggle is visible, we're on a small viewport and need to open the menu first
-  if (await menuButton.isVisible()) {
-    await menuButton.click()
+test.describe('Application smoke @cross-browser', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto(ROUTES.home)
+  })
+
+  test('home route loads', async ({ page }) => {
+    await expect(page).toHaveTitle(new RegExp(APP_NAME))
+    await expectPageMarker(page, TEST_IDS.homePage)
+  })
+
+  for (const { path, label } of NAV_LINKS.filter(link => link.path !== ROUTES.home)) {
+    test(`navigates to ${label} (${path})`, async ({ page }) => {
+      await clickNavLink(page, label)
+      await expect(page).toHaveURL(new RegExp(path.replace('/', '\\/')))
+      if (path === ROUTES.about) {
+        await expectPageMarker(page, TEST_IDS.aboutPage)
+      }
+      if (path === ROUTES.contact) {
+        await expectPageMarker(page, TEST_IDS.contactPage)
+      }
+    })
   }
 
-  const nav = page.getByRole('navigation')
-  const link = nav.getByRole('link', { name: label }).filter({ visible: true })
-  await link.click()
-}
-
-test.describe('Navigation', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/')
+  test('404 route shows recovery link', async ({ page }) => {
+    await page.goto(NOT_FOUND_PATH)
+    await expectPageMarker(page, TEST_IDS.notFoundPage)
+    await expect(page.getByTestId(TEST_IDS.goHomeLink)).toBeVisible()
   })
 
-  test('homepage loads correctly', async ({ page }) => {
-    await expect(page).toHaveTitle(/Enterprise React/)
-    await expect(page.locator('h1')).toContainText('React Version 2')
-  })
-
-  test('navigation to About page works', async ({ page }) => {
-    await clickNavLink(page, 'About')
-    await expect(page).toHaveURL(/.*about/)
-    await expect(page.locator('h1')).toContainText('About')
-  })
-
-  test('navigation to Contact page works', async ({ page }) => {
-    await clickNavLink(page, 'Contact')
-    await expect(page).toHaveURL(/.*contact/)
-    await expect(page.locator('h1')).toContainText('Contact')
-  })
-
-  test('404 page works for unknown routes', async ({ page }) => {
-    await page.goto('/nonexistent')
-    await expect(page.locator('h1')).toContainText('404')
-    await expect(page.getByRole('link', { name: 'Go Home' })).toBeVisible()
-  })
-
-  test('mobile menu toggle works', async ({ page }) => {
+  test('mobile menu exposes navigation links', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 })
-    const menuButton = page.getByRole('button', { name: 'Toggle menu' })
+    const menuButton = page.getByTestId(TEST_IDS.mobileMenuToggle)
     await expect(menuButton).toBeVisible()
     await menuButton.click()
     await expect(
-      page.getByRole('navigation').getByRole('link', { name: 'Home' }).filter({ visible: true })
+      page.getByTestId(TEST_IDS.mainNav).getByRole('link', { name: 'Home' }).filter({ visible: true })
     ).toBeVisible()
   })
 
-  test('contact form submission', async ({ page }) => {
+  test('contact form submits successfully', async ({ page }) => {
     await clickNavLink(page, 'Contact')
-    await page.fill('input#name', 'Test User')
-    await page.fill('input#email', 'test@example.com')
-    await page.fill('textarea#message', 'This is a test message')
-    await page.click('button[type="submit"]')
-    await expect(page.getByText('Message Sent!')).toBeVisible()
+    await expectPageMarker(page, TEST_IDS.contactPage)
+
+    await page.getByLabel(CONTACT_FORM.labels.name).fill('Test User')
+    await page.getByLabel(CONTACT_FORM.labels.email).fill('test@example.com')
+    await page.getByLabel(CONTACT_FORM.labels.message).fill('E2E test message')
+    await page.getByRole('button', { name: CONTACT_FORM.submit }).click()
+
+    await expect(page.getByTestId(TEST_IDS.contactSuccess)).toBeVisible()
+    await expect(page.getByText(CONTACT_FORM.successHeading)).toBeVisible()
   })
 })

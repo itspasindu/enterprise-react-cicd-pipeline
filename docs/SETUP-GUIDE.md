@@ -73,31 +73,44 @@ Log in to the VM (console, SSH, or hypervisor console).
 
 ```bash
 sudo apt update
-sudo apt install -y curl git rsync build-essential ca-certificates
+sudo apt install -y curl git rsync ca-certificates
 
-# Node.js 20
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
+# Docker Engine (Ubuntu)
+sudo apt install -y docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+# Re-login (or newgrp docker) so group membership applies
+newgrp docker
 
-node -v    # expect v20.x
-npm -v
-
-# Process manager
-sudo npm install -g pm2
+docker --version
+docker info
 ```
+
+Node.js is **not** required on the staging host for runtime (the app runs in an nginx container). Keep Node only if you still build locally on the server.
 
 ### 3.2 Create app directory
 
-The pipeline deploys to **`/opt/enterprise-react-app`**.
+The pipeline stores deploy scripts and image state under **`/opt/enterprise-react-app`**.
 
 ```bash
-sudo mkdir -p /opt/enterprise-react-app /opt/enterprise-react-app_backup
-sudo chown -R "$USER:$USER" /opt/enterprise-react-app /opt/enterprise-react-app_backup
+sudo mkdir -p /opt/enterprise-react-app/scripts
+sudo chown -R "$USER:$USER" /opt/enterprise-react-app
 ```
 
 Use the same Linux user you will put in `STAGING_USER` (examples: `ubuntu`, `opc`, your login).
 
-**Important:** CI deploy does **not** use `sudo` (no interactive password). The deploy user must own these directories.
+**Important:** CI deploy does **not** use `sudo` (no interactive password). The deploy user must own this directory and be able to run `docker` without sudo.
+
+### 3.3 Cut over from PM2 (if upgrading an existing host)
+
+```bash
+# Free port 4173
+pm2 delete enterprise-react-app 2>/dev/null || true
+pm2 save 2>/dev/null || true
+
+# Optional: remove old full-tree backup used by the previous rsync deploy
+# sudo rm -rf /opt/enterprise-react-app_backup
+```
 
 ### 3.3 Optional firewall (UFW)
 
@@ -204,7 +217,7 @@ ssh-keyscan -t ed25519,rsa staging-vm
 
 Paste into `STAGING_SSH_KNOWN_HOSTS`.
 
-The deploy job runs **Connect to Tailscale** automatically when `TAILSCALE_AUTHKEY` is set, then SSH/rsync/health checks use `STAGING_HOST` on the tailnet.
+The deploy job runs **Connect to Tailscale** automatically when `TAILSCALE_AUTHKEY` is set, then SSH/health checks use `STAGING_HOST` on the tailnet.
 
 #### Firewall on the VM (Tailscale path)
 
@@ -254,9 +267,13 @@ Used by **Deploy to Staging**.
 | --- | --- |
 | `SSH_PRIVATE_KEY` | Private key from step 4 |
 | `STAGING_HOST` | Public IP/DNS **or Tailscale IP / MagicDNS** (see §5) |
-| `STAGING_USER` | Linux user that owns `/opt/enterprise-react-app` |
+| `STAGING_USER` | Linux user that owns `/opt/enterprise-react-app` and can run Docker |
 | `STAGING_SSH_KNOWN_HOSTS` | Output of `ssh-keyscan` (over Tailscale if using Option A) |
+| `GHCR_PULL_TOKEN` | PAT (classic or fine-grained) with **`read:packages`** so the host can pull private GHCR images |
+| `GHCR_USERNAME` | *(Optional)* GHCR login user; defaults to repository owner |
 | `TAILSCALE_AUTHKEY` | *(Optional)* Tailscale auth key for private VMs |
+
+Create the PAT under GitHub → Settings → Developer settings. After the first image push, confirm the package exists under the repo **Packages** tab (you may need to link the package to the repo / set visibility).
 
 Do **not** enable Required reviewers on `staging` if you want **automatic** deploy after green CI (current design).
 
@@ -422,15 +439,17 @@ Or: **Actions → Developer Fix Choice → Run workflow**.
 
 ### Staging Ubuntu (VMware / any host)
 
-- [ ] Node ≥ 20, npm, PM2, git, rsync installed  
+- [ ] Docker Engine installed; deploy user in `docker` group  
+- [ ] `docker info` works without sudo  
 - [ ] `/opt/enterprise-react-app` owned by deploy user  
 - [ ] Deploy public key in `~/.ssh/authorized_keys`  
+- [ ] Old PM2 process removed (port 4173 free) if upgrading  
 - [ ] Ports **22** and **4173** reachable from GitHub Actions **or** Tailscale configured (`TAILSCALE_AUTHKEY` + Tailscale IP as `STAGING_HOST`) **or** self-hosted runner ready
 
 ### GitHub
 
 - [ ] Environment **`ci`** + `VITE_API_URL`  
-- [ ] Environment **`staging`** + `SSH_PRIVATE_KEY`, `STAGING_HOST`, `STAGING_USER`, `STAGING_SSH_KNOWN_HOSTS` (+ `TAILSCALE_AUTHKEY` if private VM)
+- [ ] Environment **`staging`** + `SSH_PRIVATE_KEY`, `STAGING_HOST`, `STAGING_USER`, `STAGING_SSH_KNOWN_HOSTS`, `GHCR_PULL_TOKEN` (+ optional `GHCR_USERNAME`, `TAILSCALE_AUTHKEY`)
 - [ ] Repo secret **`WIKI_TOKEN`** (optional)  
 - [ ] Wiki enabled + first page created  
 - [ ] Branch protection on `main` + required PR checks  
@@ -440,7 +459,7 @@ Or: **Actions → Developer Fix Choice → Run workflow**.
 
 - [ ] PR pipeline green (5 jobs)  
 - [ ] Merge to `main`  
-- [ ] Deploy Staging green  
+- [ ] Docker Build Push + Deploy Staging green  
 - [ ] App loads at `http://HOST:4173`  
 - [ ] Wiki report published (if configured)
 
@@ -454,7 +473,9 @@ Or: **Actions → Developer Fix Choice → Run workflow**.
 | Deploy: `STAGING_SSH_KNOWN_HOSTS` error | Secret empty | Paste `ssh-keyscan` output |
 | Deploy: SSH timeout / connection refused | Firewall / no public IP | Open TCP 22 or use self-hosted runner |
 | Deploy: Permission denied (publickey) | Wrong key/user | Match `STAGING_USER` and key in `authorized_keys` |
-| Health check fails after deploy | Port 4173 blocked or PM2 down | `pm2 status`; open 4173; check `pm2 logs` |
+| Health check fails after deploy | Port 4173 blocked or container down | `docker ps`; `docker logs enterprise-react-app`; open 4173 |
+| Deploy: Docker permission denied | User not in `docker` group | `sudo usermod -aG docker $USER` then re-login |
+| Deploy: GHCR pull unauthorized | Missing/invalid `GHCR_PULL_TOKEN` | Add PAT with `read:packages` to `staging` |
 | Wiki publish fails | Wiki off or bad token | Enable Wiki; recreate `WIKI_TOKEN` |
 | PR checks missing in branch protection | No PR run yet | Open one PR and wait for jobs |
 | `ci` environment waits for approval | Required reviewers on `ci` | Disable reviewers on `ci` |
@@ -484,10 +505,10 @@ CI=true npm run test:e2e
 ```text
 PR → main
   Code Quality → Security → Unit Tests → Build (SBOM + attest) → E2E
-  (no deploy)
+  (no Docker push / deploy)
 
 Merge / push → main
-  Same gates → Deploy Staging (SSH + prebuilt dist + PM2)
+  Same gates → Docker image → GHCR → Deploy Staging (docker pull/run :4173)
             → Failure ticket (if fail)
             → Wiki report
 ```
@@ -498,7 +519,7 @@ Merge / push → main
 
 ## Next steps (optional)
 
-- Put **Nginx + HTTPS** in front of port 4173  
+- Put **HTTPS** (or an edge proxy) in front of port 4173 if exposing publicly  
 - Add a **production** Ubuntu VM + `production` Environment + manual approval  
 - Restrict SSH to office/VPN IPs  
 - Install a **self-hosted runner** if the VM stays on a private network  

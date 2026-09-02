@@ -1,5 +1,6 @@
 import { Helmet } from 'react-helmet-async'
 import { Link } from 'react-router-dom'
+import { TEST_IDS } from '../config/app-contract'
 
 function Home() {
   return (
@@ -9,7 +10,7 @@ function Home() {
         <meta name="description" content="Welcome to our enterprise-grade React application" />
       </Helmet>
 
-      <div className="space-y-12">
+      <div className="space-y-12" data-testid={TEST_IDS.homePage}>
         {/* Hero Section */}
         <section className="text-center py-16">
           <h1 className="text-5xl md:text-7xl font-bold mb-6 text-gradient">React Version 2</h1>
