@@ -1,6 +1,6 @@
 import { Helmet } from 'react-helmet-async'
 import { useState } from 'react'
-import { CONTACT_FORM, TEST_IDS } from '../config/app-contract'
+import { CONTACT_FORM, TEST_IDS, PAGE_TITLES } from '../config/app-contract'
 
 function Contact() {
   const [formData, setFormData] = useState({ name: '', email: '', message: '' })
@@ -17,7 +17,7 @@ function Contact() {
   return (
     <>
       <Helmet>
-        <title>Contact | Enterprise React App</title>
+        <title>{PAGE_TITLES.contact}</title>
         <meta name="description" content="Get in touch with our team" />
       </Helmet>
 

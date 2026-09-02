@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { NAV_LINKS, ROUTES, TEST_IDS, CONTACT_FORM } from '../src/config/app-contract'
+import { NAV_LINKS, ROUTES, TEST_IDS, CONTACT_FORM, PAGE_TITLES, APP_NAME } from '../src/config/app-contract'
 
 describe('app-contract', () => {
   it('defines unique nav paths and labels', () => {
@@ -18,6 +18,13 @@ describe('app-contract', () => {
   it('uses unique test ids', () => {
     const ids = Object.values(TEST_IDS)
     expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('defines page titles for E2E title checks', () => {
+    expect(PAGE_TITLES.home).toContain(APP_NAME)
+    expect(PAGE_TITLES.about).toContain(APP_NAME)
+    expect(PAGE_TITLES.contact).toContain(APP_NAME)
+    expect(PAGE_TITLES.notFound).toBeTruthy()
   })
 
   it('defines contact form labels used by getByLabel in E2E', () => {

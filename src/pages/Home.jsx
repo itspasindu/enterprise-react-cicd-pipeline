@@ -1,12 +1,12 @@
 import { Helmet } from 'react-helmet-async'
 import { Link } from 'react-router-dom'
-import { TEST_IDS } from '../config/app-contract'
+import { TEST_IDS, PAGE_TITLES } from '../config/app-contract'
 
 function Home() {
   return (
     <>
       <Helmet>
-        <title>Home | Enterprise React App</title>
+        <title>{PAGE_TITLES.home}</title>
         <meta name="description" content="Welcome to our enterprise-grade React application" />
       </Helmet>
 

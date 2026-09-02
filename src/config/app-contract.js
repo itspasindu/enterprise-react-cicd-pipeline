@@ -6,6 +6,14 @@
 
 export const APP_NAME = 'Enterprise React App'
 
+/** Document titles — keep in sync with page <Helmet> titles */
+export const PAGE_TITLES = {
+  home: `Home | ${APP_NAME}`,
+  about: `About | ${APP_NAME}`,
+  contact: `Contact | ${APP_NAME}`,
+  notFound: '404 | Page Not Found',
+}
+
 export const ROUTES = {
   home: '/',
   about: '/about',

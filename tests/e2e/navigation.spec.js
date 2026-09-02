@@ -7,7 +7,7 @@ import {
   ROUTES,
   CONTACT_FORM,
   NOT_FOUND_PATH,
-  APP_NAME,
+  PAGE_TITLES,
 } from './helpers/navigation.js'
 
 /**
@@ -20,7 +20,7 @@ test.describe('Application smoke @cross-browser', () => {
   })
 
   test('home route loads', async ({ page }) => {
-    await expect(page).toHaveTitle(APP_NAME)
+    await expect(page).toHaveTitle(PAGE_TITLES.home)
     await expectPageMarker(page, TEST_IDS.homePage)
   })
 

@@ -25,6 +25,6 @@ export {
   TEST_IDS,
   ROUTES,
   CONTACT_FORM,
-  APP_NAME,
+  PAGE_TITLES,
   NOT_FOUND_PATH,
 } from '../../../src/config/app-contract.js'

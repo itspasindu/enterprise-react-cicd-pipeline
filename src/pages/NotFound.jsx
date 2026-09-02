@@ -1,12 +1,12 @@
 import { Helmet } from 'react-helmet-async'
 import { Link } from 'react-router-dom'
-import { ARIA, TEST_IDS } from '../config/app-contract'
+import { ARIA, TEST_IDS, PAGE_TITLES } from '../config/app-contract'
 
 function NotFound() {
   return (
     <>
       <Helmet>
-        <title>404 | Page Not Found</title>
+        <title>{PAGE_TITLES.notFound}</title>
         <meta name="robots" content="noindex" />
       </Helmet>
 
