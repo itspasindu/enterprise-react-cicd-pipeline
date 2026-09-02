@@ -33,22 +33,23 @@ The pipeline is defined in:
 
 | File | Purpose |
 | --- | --- |
-| `.github/workflows/enterprise-ci-cd.yml` | Main CI/CD pipeline (8 stages) |
+| `.github/workflows/enterprise-ci-cd.yml` | Main CI/CD pipeline (quality → Docker → staging) |
 | `.github/workflows/developer-fix-choice.yml` | Developer-approved auto vs manual fix |
-| `scripts/deploy.sh` | Staging server deploy + PM2 (any SSH Ubuntu host) |
+| `scripts/deploy.sh` | Staging Docker deploy (`docker pull` / `docker run`) |
 | `scripts/health-check.sh` | Post-deploy validation |
 | `scripts/create-failure-ticket.sh` | GitHub Issue on failure |
 | `scripts/publish-wiki-report.sh` | Wiki report after each main run |
+| `Dockerfile` / `nginx.conf` | Runtime image serving CI-built `dist/` |
 
 **Design principles:**
 
-- **Build once** — a single production build is reused by E2E and staging deploy
+- **Build once** — a single production build is reused by E2E, the Docker image, and staging deploy
 - **Least privilege** — default `permissions: contents: read`; jobs elevate only when needed
 - **No silent dependency mutation** — CI never runs `npm audit fix`
 - **Environment-scoped secrets** — deploy/build secrets live in GitHub Environments
 - **Observable failures** — GitHub Issues + Wiki reports on `main`
 
-**Runtime stack:** Node.js 20, React 18, Vite, Vitest, Playwright, PM2 on Ubuntu staging (VMware, Oracle VM, EC2, or any SSH host).
+**Runtime stack:** Node.js 20 (CI build), React 18, Vite, Vitest, Playwright, Docker + nginx on Ubuntu staging (VMware, Oracle VM, EC2, or any SSH host), images on GHCR.
 
 ---
 
@@ -71,6 +72,7 @@ flowchart TB
   end
 
   subgraph release [Main-only Release]
+    IMG[Docker Build Push GHCR]
     D[Deploy Staging]
     T[Failure Ticket]
     W[Wiki Report]
@@ -87,7 +89,8 @@ flowchart TB
   U --> B
   B --> E
 
-  E --> D
+  E --> IMG
+  IMG --> D
   PUSH --> T
   PUSH --> W
   S -.quality fail on main.-> F
@@ -115,9 +118,9 @@ on:
 
 | Trigger | Jobs that run | Jobs skipped |
 | --- | --- | --- |
-| **Pull request → `main`** | Code Quality, Security, Unit Tests, Build, E2E | Deploy, Failure Ticket, Wiki, Await Fix Decision |
-| **Push → `main`** | All stages including deploy, tickets, wiki | — |
-| **`workflow_dispatch`** | Same as push (including deploy) | — |
+| **Pull request → `main`** | Code Quality, Security, Unit Tests, Build, E2E | Docker push, Deploy, Failure Ticket, Wiki, Await Fix Decision |
+| **Push → `main`** | All stages including Docker, deploy, tickets, wiki | — |
+| **`workflow_dispatch`** | Same as push (including Docker + deploy) | — |
 | **Push to other branches** | Nothing | Entire pipeline |
 
 ### Concurrency
@@ -247,50 +250,75 @@ Tests run against the **exact `dist/` artifact** from Stage 4:
 
 ---
 
-### Stage 6 — Deploy to Staging
+### Stage 6 — Build & Push Docker Image
+
+**Job name:** `Build & Push Docker Image`  
+**Runs on:** push to `main` and `workflow_dispatch` only  
+**Depends on:** Build, E2E  
+**Permissions:** `packages: write`, `security-events: write`
+
+#### Flow
+
+```text
+1. Download build-artifact (same dist/ as E2E)
+2. docker build (nginx + dist + nginx.conf)
+3. Push to GHCR: ghcr.io/<owner>/<repo>:<full_sha> and :staging
+4. Trivy image scan (SARIF → Security tab)
+```
+
+**Important:** The image packages the CI-built `dist/` — there is **no** second Vite build inside Docker in the pipeline.
+
+---
+
+### Stage 7 — Deploy to Staging
 
 **Job name:** `Deploy to Staging`  
 **Runs on:** push to `main` and `workflow_dispatch` only  
-**Depends on:** Build, E2E  
+**Depends on:** Build, E2E, Docker Build Push  
 **Environment:** `staging`
 
 #### Deploy flow
 
 ```text
-1. Download build-artifact (same dist/ as E2E)
-2. SSH to staging EC2 (pinned known_hosts)
-3. Backup current /opt/enterprise-react-app
-4. rsync project + prebuilt dist to server
-5. USE_PREBUILT_DIST=true ./scripts/deploy.sh staging
+1. SSH to staging (pinned known_hosts; optional Tailscale)
+2. Verify Docker Engine + docker group permissions
+3. Sync scripts/deploy.sh + health-check.sh to /opt/enterprise-react-app/scripts/
+4. docker login ghcr.io (GHCR_PULL_TOKEN)
+5. IMAGE=ghcr.io/...:<sha> ./scripts/deploy.sh staging
 6. Health check (HTTP 200 on :4173)
 7. Smoke tests (/, /about, /contact + header warnings)
-8. On failure → automatic rollback from backup
+8. On failure → docker run previous image from previous-image.txt
 ```
 
-**Important:** The server does **not** rebuild the app when `USE_PREBUILT_DIST=true`. It only runs `npm ci` for runtime deps and serves the CI-built `dist/` via PM2 + `vite preview`.
+**Important:** Staging runs the nginx container published to GHCR. Host port **4173** maps to container port **80**.
 
-**Rollback:** If deploy or post-deploy checks fail, the job restores `/opt/enterprise-react-app_backup` and restarts PM2 with the previous version.
+**Rollback:** If deploy or post-deploy checks fail, the job starts the image recorded in `/opt/enterprise-react-app/previous-image.txt`.
 
 ---
 
-### Stage 7 — Create Failure Ticket
+### Stage 8 — Create Failure Ticket
 
 **Job name:** `Create Failure Ticket`  
 **Runs on:** push to `main` only, when any required stage fails  
 **Script:** `scripts/create-failure-ticket.sh`
 
-Creates a GitHub Issue with:
+**PR failures:** Job `Create PR Failure Ticket` runs on `pull_request` when code-quality, security, unit, build, or E2E fails. Issues are labeled `pull-request` + `ci-failure`.
 
-- Labels: `ci-failure`, `bug`, `needs-triage` (+ `security` if security scan failed)
-- Failed stage checklist
-- Link to workflow run
-- Instructions for `fix/auto` vs `fix/manual`
+Creates a detailed GitHub Issue with:
 
-**Deduplication:** If an open issue already exists for the same failed stage set, a comment is added instead of a new issue.
+- Labels: `ci-failure`, `bug`, `needs-triage`, `priority/high` (+ stage labels `ci/quality`, `ci/e2e`, etc.)
+- Security failures also get `security` and `priority/critical`
+- Per-stage resolution checklist and **direct links to failed job logs** (via GitHub API)
+- Stage-specific investigation guide and local reproduce commands
+- Artifact download link, commit message, and fix-path instructions (`fix/auto` vs `fix/manual`)
+
+**Shared library:** `scripts/lib/ci-report-lib.sh` (troubleshooting text used by tickets and wiki).
+
+**Deduplication:** If an open issue already exists for the same failed stage set, a detailed comment is added instead of a new issue.
 
 ---
 
-### Stage 8 — Publish Wiki Report
+### Stage 9 — Publish Wiki Report
 
 **Job name:** `Publish Wiki Report`  
 **Runs on:** push to `main` only (success or failure)  
@@ -301,9 +329,12 @@ Creates/updates:
 
 | Wiki page | Content |
 | --- | --- |
-| `Pipeline-Report-YYYY-MM-DD-run-<id>` | Per-run stage results + artifact list |
-| `Pipeline-Reports` | Index (newest first, last 50 runs) |
-| `Home` | Link to latest report |
+| `Pipeline-Report-YYYY-MM-DD-run-<id>` | Run metadata, per-stage table with job links, failure analysis, artifacts |
+| `Pipeline-Reports` | Index with commit SHA (newest first, last 50 runs) |
+| `Home` | Wiki hub with quick links |
+| `Pipeline-Overview` | Stages, triggers, principles (seeded once) |
+| `Artifact-Reference` | Artifact names, retention, download steps (seeded once) |
+| `Troubleshooting` | Common failures by stage (seeded once) |
 
 ---
 
@@ -346,13 +377,17 @@ Posts a checklist on the Issue and assigns the actor. No code changes are made b
         build-artifact   SBOM bundle   Attestation
         (dist/)          (tarball +     (provenance)
                           SHA256SUMS)
-              │              │
-              ▼              ▼
-         E2E Tests      Audit / compliance
+              │
+              ▼
+         E2E Tests
+              │
+              ▼
+        Docker image (GHCR)
+        :<sha> + :staging
               │
               ▼
         Staging Deploy
-     (USE_PREBUILT_DIST=true)
+     (docker pull / run :4173)
 ```
 
 ### Artifact names
@@ -395,21 +430,27 @@ Posts a checklist on the Issue and assigns the actor. No code changes are made b
 ### Server layout
 
 ```text
-/opt/enterprise-react-app/          ← live deployment
-/opt/enterprise-react-app_backup/   ← rollback snapshot
+/opt/enterprise-react-app/                 ← state + deploy scripts
+  scripts/deploy.sh
+  scripts/health-check.sh
+  current-image.txt                        ← last successfully started image ref
+  previous-image.txt                       ← prior image for rollback
 ```
 
-### PM2 process
+### Docker process
 
 ```bash
-pm2 start "npm run start -- --host 0.0.0.0 --port 4173" --name enterprise-react-app
+docker run -d --restart unless-stopped \
+  --name enterprise-react-app \
+  -p 4173:80 \
+  ghcr.io/<owner>/<repo>:<sha>
 ```
 
-App is served at: `http://<STAGING_HOST>:4173`
+App is served at: `http://<STAGING_HOST>:4173` (nginx in the container listens on 80).
 
-### Pre-deploy backup
+### Rollback
 
-Before each deploy, the current `/opt/enterprise-react-app` is copied to `_backup`. Rollback restores this on failure.
+Before replacing the running container, `deploy.sh` writes the current image id/ref to `previous-image.txt`. On deploy/health failure, CI starts that previous image again.
 
 ---
 
@@ -419,7 +460,7 @@ Before each deploy, the current `/opt/enterprise-react-app` is copied to `_backu
 
 - **Automatic:** on `main` push failures
 - **Manual:** `.github/ISSUE_TEMPLATE/ci-failure.yml`
-- **Labels:** `ci-failure`, `bug`, `needs-triage`, `fix/auto`, `fix/manual`, `fix/auto-applied`, `fix/manual-in-progress`, `security`
+- **Labels:** `ci-failure`, `bug`, `needs-triage`, `priority/high`, `priority/critical`, `ci/quality`, `ci/security`, `ci/tests`, `ci/build`, `ci/e2e`, `ci/docker`, `ci/deploy`, `fix/auto`, `fix/manual`, `fix/auto-applied`, `fix/manual-in-progress`, `security`
 
 ### GitHub Wiki (reports)
 
@@ -455,6 +496,8 @@ Used by the **Deploy to Staging** job.
 | `STAGING_HOST` | Public IP/DNS, **or Tailscale `100.x.y.z` / MagicDNS name** |
 | `STAGING_USER` | SSH user (`ubuntu`, `opc`, etc.) |
 | `STAGING_SSH_KNOWN_HOSTS` | Pinned host key lines |
+| `GHCR_PULL_TOKEN` | PAT (or fine-grained token) with `read:packages` for private GHCR pulls |
+| `GHCR_USERNAME` | Optional GHCR username (defaults to repository owner) |
 | `TAILSCALE_AUTHKEY` | Optional. When set, deploy joins Tailscale before SSH (private VMware/LAN) |
 
 For Tailscale setup, see [SETUP-GUIDE.md §5 Option A](./SETUP-GUIDE.md#option-a--tailscale-recommended-for-private-vmware--oracle-vm).
@@ -547,8 +590,9 @@ Download from **Actions → workflow run → Artifacts**.
 
 | Artifact | Used by | Purpose |
 | --- | --- | --- |
-| `build-artifact` | E2E, Deploy | Exact production build |
+| `build-artifact` | E2E, Docker image | Exact production build |
 | `app-dist-<sha>-bundle` | Compliance/audit | Immutable tarball + SBOM + checksums |
+| GHCR `:<sha>` / `:staging` | Staging deploy | nginx image of the same `dist/` |
 | `coverage-report` | Developers | Unit test coverage |
 | `playwright-report` | QA/debug | E2E HTML report |
 
@@ -561,11 +605,10 @@ View **attestations** on the Actions run or repository **Attestations** UI.
 ### `scripts/deploy.sh`
 
 ```bash
-./scripts/deploy.sh staging              # builds on server (local/manual)
-USE_PREBUILT_DIST=true ./scripts/deploy.sh staging   # uses CI dist/ (pipeline)
+IMAGE=ghcr.io/owner/repo:abc1234 ./scripts/deploy.sh staging
 ```
 
-Steps: `npm ci` → build (optional) → PM2 start → health check.
+Steps: record previous image → `docker pull` → stop/rm container → `docker run -p 4173:80` → health check.
 
 ### `scripts/health-check.sh`
 
@@ -593,6 +636,9 @@ Called after each `main` run. Publishes Wiki pages.
 | Build fails on PR — missing `VITE_API_URL` | `ci` environment secret missing | Add secret to `ci` environment |
 | Deploy fails — `STAGING_SSH_KNOWN_HOSTS` | Secret not set | Add pinned known_hosts to `staging` |
 | Deploy fails — SSH timeout | SG blocks port 22 | Open inbound 22 for GitHub Actions IPs |
+| Deploy fails — Docker missing / permission | Engine not installed or user not in `docker` group | Install Docker; `usermod -aG docker $USER`; re-login |
+| Deploy fails — `GHCR_PULL_TOKEN` | Secret missing or lacks `read:packages` | Add PAT to `staging` environment |
+| Health check fails after deploy | Port 4173 blocked or container down | `docker ps`; `docker logs enterprise-react-app`; open 4173 |
 | Wiki report fails | Wiki disabled or no `WIKI_TOKEN` | Enable Wiki, create first page, add PAT |
 | E2E homepage fails all browsers | Page text changed, test outdated | Align `navigation.spec.js` with `Home.jsx` |
 | `ci` environment waits for approval | Required reviewers enabled | Disable reviewers on `ci` (keep on `production` later) |
@@ -625,13 +671,12 @@ The pipeline is **staging-ready**. Production is planned but not wired:
 | Attestation verify before deploy | Attestation created, not verified at deploy |
 | Coverage threshold gate | Not enforced |
 | Dependabot / CODEOWNERS | Not added |
-| Deploy tarball-only (no rsync source) | Partial — dist promoted, source still rsynced |
 
 When production is enabled, the intended flow is:
 
 ```text
 staging green → manual approval (production environment)
-              → deploy same attested artifact to prod EC2
+              → deploy same GHCR image (attested dist) to prod
               → prod health/smoke/monitoring
 ```
 
@@ -650,11 +695,14 @@ code-quality ─────┬──► security-scan ──► await-fix-decis
                                    e2e-tests
                                        │
                          (main only)   ▼
-                              deploy-staging
+                              docker-build-push (GHCR)
                                        │
-                    ┌──────────────────┴──────────────────┐
-                    ▼                                         ▼
-           create-failure-ticket (on fail)          publish-wiki-report
+                                       ▼
+                                deploy-staging
+                                       │
+              ┌────────────────────────┴────────────────────────┐
+              ▼                                                 ▼
+     create-failure-ticket (on fail)              publish-wiki-report (always)
 ```
 
 ---

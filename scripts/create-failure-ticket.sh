@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Create or update a GitHub Issue when CI/CD stages fail on main.
+# Create or update a detailed GitHub Issue when CI/CD stages fail on main.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/ci-report-lib.sh
+source "${SCRIPT_DIR}/lib/ci-report-lib.sh"
 
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${GH_REPO:?GH_REPO is required}"
@@ -9,12 +13,28 @@ set -euo pipefail
 : "${ACTOR:?ACTOR is required}"
 : "${EVENT_NAME:?EVENT_NAME is required}"
 
+RUN_ID="${RUN_ID:-}"
+PR_NUMBER="${PR_NUMBER:-}"
+PR_URL="${PR_URL:-}"
+COMMIT_MESSAGE="${COMMIT_MESSAGE:-}"
+REF_NAME="${REF_NAME:-main}"
+WORKFLOW_NAME="${WORKFLOW_NAME:-CI/CD Pipeline}"
+GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-$GH_REPO}"
+
+if [ -z "$COMMIT_MESSAGE" ] && command -v gh >/dev/null 2>&1; then
+  COMMIT_MESSAGE="$(GH_TOKEN="$GH_TOKEN" gh api "repos/${GH_REPO}/commits/${SHA}" \
+    --jq '.commit.message | split("\n")[0]' 2>/dev/null || true)"
+fi
+
 CODE_QUALITY="${CODE_QUALITY:-unknown}"
 SECURITY_SCAN="${SECURITY_SCAN:-unknown}"
 UNIT_TESTS="${UNIT_TESTS:-unknown}"
 BUILD="${BUILD:-unknown}"
 E2E_TESTS="${E2E_TESTS:-unknown}"
+DOCKER_BUILD_PUSH="${DOCKER_BUILD_PUSH:-unknown}"
 DEPLOY_STAGING="${DEPLOY_STAGING:-unknown}"
+
+export GITHUB_REPOSITORY
 
 ensure_label() {
   local name="$1"
@@ -31,115 +51,282 @@ ensure_label "security" "B60205" "Security-related failure"
 ensure_label "needs-triage" "FBCA04" "Needs investigation"
 ensure_label "fix/auto" "0E8A16" "Approve automated CI auto-fix"
 ensure_label "fix/manual" "1D76DB" "Developer will fix manually"
+ensure_label "ci/quality" "C5DEF5" "Code quality stage failure"
+ensure_label "ci/security" "F9D0C4" "Security scan stage failure"
+ensure_label "ci/tests" "BFDADC" "Unit test stage failure"
+ensure_label "ci/build" "D4C5F9" "Build stage failure"
+ensure_label "ci/e2e" "FEF2C0" "E2E test stage failure"
+ensure_label "ci/docker" "C2E0C6" "Docker build/push stage failure"
+ensure_label "ci/deploy" "FBCA04" "Staging deploy stage failure"
+ensure_label "priority/high" "B60205" "High priority — blocks main"
+ensure_label "priority/critical" "8B0000" "Critical — security or production path"
+ensure_label "pull-request" "5319E7" "Failure detected on a pull request check"
 
-FAILED_STAGES=()
-LABELS=("ci-failure" "bug" "needs-triage")
+declare -a FAILED_STAGE_KEYS=()
+declare -a FAILED_STAGE_NAMES=()
+LABELS=("ci-failure" "bug" "needs-triage" "priority/high")
 
-add_stage() {
+if [ "$EVENT_NAME" = "pull_request" ]; then
+  LABELS+=("pull-request")
+fi
+
+record_failure() {
   local result="$1"
-  local label="$2"
+  local key="$2"
   if [ "$result" = "failure" ]; then
-    FAILED_STAGES+=("$label")
+    FAILED_STAGE_KEYS+=("$key")
+    FAILED_STAGE_NAMES+=("$(stage_display_name "$key")")
+    local stage_label
+    stage_label="$(stage_issue_label "$key")"
+    if [ -n "$stage_label" ]; then
+      LABELS+=("$stage_label")
+    fi
   fi
 }
 
-add_stage "$CODE_QUALITY" "Code Quality Checks"
-add_stage "$SECURITY_SCAN" "Security Analysis"
-add_stage "$UNIT_TESTS" "Unit Tests"
-add_stage "$BUILD" "Build & Bundle Analysis"
-add_stage "$E2E_TESTS" "E2E Tests"
-add_stage "$DEPLOY_STAGING" "Deploy to Staging"
+record_failure "$CODE_QUALITY" "code-quality"
+record_failure "$SECURITY_SCAN" "security-scan"
+record_failure "$UNIT_TESTS" "unit-tests"
+record_failure "$BUILD" "build"
+record_failure "$E2E_TESTS" "e2e-tests"
+record_failure "$DOCKER_BUILD_PUSH" "docker-build-push"
+record_failure "$DEPLOY_STAGING" "deploy-staging"
 
-if [ ${#FAILED_STAGES[@]} -eq 0 ]; then
+if [ ${#FAILED_STAGE_KEYS[@]} -eq 0 ]; then
   echo "No failed stages detected; skipping ticket creation."
   exit 0
 fi
 
 if [ "$SECURITY_SCAN" = "failure" ]; then
-  LABELS+=("security")
+  LABELS+=("security" "priority/critical")
 fi
 
-STAGES_CSV=$(IFS=', '; echo "${FAILED_STAGES[*]}")
+UNIQUE_LABELS=()
+for label in "${LABELS[@]}"; do
+  skip=false
+  for u in "${UNIQUE_LABELS[@]:-}"; do
+    if [ "$u" = "$label" ]; then skip=true; break; fi
+  done
+  if [ "$skip" = false ]; then
+    UNIQUE_LABELS+=("$label")
+  fi
+done
+LABELS=("${UNIQUE_LABELS[@]}")
+
+STAGES_CSV=$(IFS=', '; echo "${FAILED_STAGE_NAMES[*]}")
 SHORT_SHA="${SHA:0:7}"
-TITLE="[CI Failure]: ${STAGES_CSV} failed on main (${SHORT_SHA})"
+SEVERITY_PREFIX="[CI Failure]"
+if [ "$EVENT_NAME" = "pull_request" ]; then
+  SEVERITY_PREFIX="[CI PR Failure]"
+elif [ "$SECURITY_SCAN" = "failure" ]; then
+  SEVERITY_PREFIX="[CI Security Failure]"
+fi
+
+if [ -n "$PR_NUMBER" ]; then
+  TITLE="${SEVERITY_PREFIX}: ${STAGES_CSV} on PR #${PR_NUMBER} (${SHORT_SHA})"
+else
+  TITLE="${SEVERITY_PREFIX}: ${STAGES_CSV} on ${REF_NAME} (${SHORT_SHA})"
+fi
+
+fetch_job_urls "$RUN_ID" "$GH_REPO"
+
+JOB_LOGS_MD="| Stage | Status | Logs |"
+JOB_LOGS_MD+=$'\n'"| --- | --- | --- |"
+for key in code-quality security-scan unit-tests build e2e-tests docker-build-push deploy-staging; do
+  result_var=""
+  case "$key" in
+    code-quality) result_var="$CODE_QUALITY" ;;
+    security-scan) result_var="$SECURITY_SCAN" ;;
+    unit-tests) result_var="$UNIT_TESTS" ;;
+    build) result_var="$BUILD" ;;
+    e2e-tests) result_var="$E2E_TESTS" ;;
+    docker-build-push) result_var="$DOCKER_BUILD_PUSH" ;;
+    deploy-staging) result_var="$DEPLOY_STAGING" ;;
+  esac
+  log_cell="n/a"
+  if [ "$result_var" = "failure" ]; then
+    url="$(job_url_for_stage "$key")"
+    if [ -n "$url" ]; then
+      log_cell="[View logs](${url})"
+    else
+      log_cell="[Workflow run](${RUN_URL})"
+    fi
+  elif [ "$result_var" = "success" ]; then
+    log_cell="—"
+  fi
+  JOB_LOGS_MD+=$'\n'"| $(stage_display_name "$key") | \`${result_var}\` | ${log_cell} |"
+done
+
+TROUBLESHOOTING_MD=""
+for key in "${FAILED_STAGE_KEYS[@]}"; do
+  TROUBLESHOOTING_MD+="$(stage_troubleshooting_md "$key")"$'\n\n'
+done
+
+PRIMARY_KEY="${FAILED_STAGE_KEYS[0]}"
+REPRO_CMD="$(stage_reproduce_cmd "$PRIMARY_KEY")"
+FAILED_CHECKLIST=$(printf -- '- [ ] **%s** — investigate and resolve\n' "${FAILED_STAGE_NAMES[@]}")
+
+COMMIT_LINE="\`${SHA}\`"
+if [ -n "$COMMIT_MESSAGE" ]; then
+  COMMIT_LINE="\`${SHA}\` — ${COMMIT_MESSAGE}"
+fi
+
+COMPARE_URL="https://github.com/${GH_REPO}/commit/${SHA}"
+ARTIFACTS_URL="${RUN_URL}#artifacts"
+
+PR_ROW=""
+if [ -n "$PR_NUMBER" ]; then
+  PR_ROW="| **Pull request** | [#${PR_NUMBER}](${PR_URL}) |"
+fi
+
+SEARCH_TITLE="${STAGES_CSV}"
+if [ -n "$PR_NUMBER" ]; then
+  SEARCH_TITLE="PR #${PR_NUMBER}"
+fi
 
 EXISTING_ISSUE=$(gh issue list \
   --repo "$GH_REPO" \
   --state open \
   --label "ci-failure" \
-  --search "\"[CI Failure]: ${STAGES_CSV} failed on main\" in:title" \
+  --search "\"${SEARCH_TITLE}\" in:title" \
   --json number,url \
-  --jq '.[0].url // empty')
+  --jq '.[0].url // empty' 2>/dev/null || true)
 
 if [ -n "$EXISTING_ISSUE" ]; then
   echo "Open ticket already exists: $EXISTING_ISSUE"
   gh issue comment "$EXISTING_ISSUE" --repo "$GH_REPO" --body "$(cat <<EOF
-### Recurring CI failure
+### Recurring pipeline failure
 
-Another pipeline run failed with the same stage(s).
+Another run failed with the same stage(s).
 
 | Field | Value |
 | --- | --- |
-| Run | ${RUN_URL} |
-| Commit | \`${SHA}\` |
+| Workflow | ${WORKFLOW_NAME} |
+| Run | [#${RUN_ID:-?}](${RUN_URL}) |
+| Commit | ${COMMIT_LINE} |
+| Branch | \`${REF_NAME}\` |
 | Actor | @${ACTOR} |
 | Event | \`${EVENT_NAME}\` |
 | Failed stages | ${STAGES_CSV} |
+$(if [ -n "$PR_NUMBER" ]; then echo "| Pull request | [#${PR_NUMBER}](${PR_URL}) |"; fi)
 
-Please investigate, choose \`fix/auto\` or \`fix/manual\` on this issue, and close once \`main\` is green.
+#### Failed stage checklist
+${FAILED_CHECKLIST}
+
+#### Quick links
+- [Download artifacts](${ARTIFACTS_URL})
+- [Commit diff](${COMPARE_URL})
+
+---
+_Add \`fix/auto\` or \`fix/manual\` if not already chosen. Close when \`${REF_NAME}\` is green._
 EOF
 )"
   echo "Commented on existing ticket instead of creating a duplicate."
   exit 0
 fi
 
-FAILED_LIST=$(printf -- '- [ ] %s\n' "${FAILED_STAGES[@]}")
+if [ "$EVENT_NAME" = "pull_request" ]; then
+  FIX_PATH_SECTION=$(cat <<EOF
+### How to fix (pull request)
 
-BODY=$(cat <<EOF
-## Automated CI/CD failure ticket
+Fix on branch \`${REF_NAME}\`, push to the PR, and wait for checks to re-run:
 
-The Enterprise CI/CD pipeline detected one or more failing stages on \`main\`.
+\`\`\`bash
+git checkout ${REF_NAME}
+${REPRO_CMD}
+git add -A && git commit -m "fix: resolve ${STAGES_CSV}"
+git push
+\`\`\`
 
-### Failed stages
-${FAILED_LIST}
+**Pull request:** ${PR_URL:-link unavailable}
 
-### Run details
-| Field | Value |
-| --- | --- |
-| Workflow run | ${RUN_URL} |
-| Commit | \`${SHA}\` |
-| Actor | @${ACTOR} |
-| Event | \`${EVENT_NAME}\` |
-| Branch | \`main\` |
-
-### Job results
-| Stage | Result |
-| --- | --- |
-| Code Quality Checks | \`${CODE_QUALITY}\` |
-| Security Analysis | \`${SECURITY_SCAN}\` |
-| Unit Tests | \`${UNIT_TESTS}\` |
-| Build & Bundle Analysis | \`${BUILD}\` |
-| E2E Tests | \`${E2E_TESTS}\` |
-| Deploy to Staging | \`${DEPLOY_STAGING}\` |
-
-### Developer approval — choose a fix path
+Close this issue when PR checks are green.
+EOF
+)
+else
+  FIX_PATH_SECTION=$(cat <<EOF
+### Developer fix path (approval required)
 
 Auto-fix is **paused** until a developer chooses:
 
 | Choice | How to select | What happens |
 | --- | --- | --- |
-| **Auto fix** | Add label \`fix/auto\` to this issue | CI runs \`lint:fix\` and Prettier, then commits to \`main\` (no \`npm audit fix\`) |
-| **Manual fix** | Add label \`fix/manual\` to this issue | CI does not change code; you fix locally / via PR |
+| **Auto fix** | Add label \`fix/auto\` to this issue | Runs \`lint:fix\` + Prettier, commits to \`${REF_NAME}\` (never \`npm audit fix\`) |
+| **Manual fix** | Add label \`fix/manual\` to this issue | No CI code changes; fix via local branch / PR |
 
-You can also run **Actions → Developer Fix Choice → Run workflow** and select \`auto\` or \`manual\`.
+Or: **Actions → Developer Fix Choice → Run workflow** → select \`auto\` or \`manual\`.
 
-### Next steps
-1. Inspect the [workflow run](${RUN_URL}) logs.
-2. Add \`fix/auto\` **or** \`fix/manual\` (manual approval).
-3. Confirm \`main\` is green after the fix.
-4. Close this issue when resolved.
+---
 
-> Track tickets in **GitHub Issues**. Optionally add them to a **GitHub Project** board.
+### Resolution workflow
+
+1. Open the [workflow run](${RUN_URL}) and failed job logs (table above).
+2. Download artifacts (\`playwright-report\`, \`coverage-report\`, \`build-artifact\`) if relevant.
+3. Add \`fix/auto\` **or** \`fix/manual\`.
+4. Apply fix; confirm a green run on \`${REF_NAME}\`.
+5. Check off stages above and **close this issue**.
+EOF
+)
+fi
+
+BODY=$(cat <<EOF
+## Pipeline failure report
+
+> Automated ticket from **${WORKFLOW_NAME}**. One or more required stages failed on \`${REF_NAME}\`.
+
+### Summary
+
+| Field | Value |
+| --- | --- |
+| **Overall** | ❌ Failed (${STAGES_CSV}) |
+| **Workflow run** | [#${RUN_ID:-?}](${RUN_URL}) |
+| **Commit** | [${SHORT_SHA}](${COMPARE_URL}) |
+| **Message** | ${COMMIT_MESSAGE:-_(not available)_} |
+| **Branch** | \`${REF_NAME}\` |
+${PR_ROW}
+| **Triggered by** | @${ACTOR} (\`${EVENT_NAME}\`) |
+| **Artifacts** | [Download from run](${ARTIFACTS_URL}) |
+
+---
+
+### Failed stages (resolution checklist)
+
+${FAILED_CHECKLIST}
+
+---
+
+### All stage results
+
+${JOB_LOGS_MD}
+
+---
+
+### Investigation guide
+
+${TROUBLESHOOTING_MD}
+
+---
+
+### Reproduce locally (primary failure: $(stage_display_name "$PRIMARY_KEY"))
+
+\`\`\`bash
+git checkout ${SHA}
+${REPRO_CMD}
+\`\`\`
+
+---
+
+${FIX_PATH_SECTION}
+
+### References
+
+- [CI/CD Pipeline docs](https://github.com/${GH_REPO}/blob/main/docs/CI-CD-PIPELINE.md)
+- [Setup guide](https://github.com/${GH_REPO}/blob/main/docs/SETUP-GUIDE.md)
+- [Wiki — Troubleshooting](https://github.com/${GH_REPO}/wiki/Troubleshooting)
+- [Open CI failure issues](https://github.com/${GH_REPO}/issues?q=is%3Aissue+is%3Aopen+label%3Aci-failure)
+
+---
+_Auto-generated by \`scripts/create-failure-ticket.sh\`_
 EOF
 )
 

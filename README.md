@@ -14,9 +14,12 @@ enterprise-react-app/
 │       └── developer-fix-choice.yml # Developer picks auto vs manual fix
 ├── scripts/
 │   ├── health-check.sh             # Comprehensive health check script
-│   ├── deploy.sh                   # EC2 deployment and process automation
+│   ├── deploy.sh                   # Docker pull/run on staging
 │   ├── create-failure-ticket.sh    # Opens GitHub Issues on CI failures
 │   └── publish-wiki-report.sh      # Publishes final CI report to Wiki
+├── Dockerfile                      # nginx image for CI-built dist/
+├── nginx.conf                      # SPA + security headers
+├── .dockerignore
 ├── src/
 │   ├── components/                 # Reusable components
 │   ├── pages/                      # Route pages
@@ -50,19 +53,22 @@ enterprise-react-app/
 | Data Fetching | React Query              |
 | Testing       | Vitest + Playwright      |
 | Linting       | ESLint + Prettier        |
-| Runtime       | Node.js + PM2 on AWS EC2 |
-| CI/CD         | GitHub Actions           |
+| Runtime       | Docker + nginx on staging (GHCR) |
+| CI/CD         | GitHub Actions                   |
 
 ## 🚀 Quick Start
 
 > **Complete setup guide:** [docs/SETUP-GUIDE.md](docs/SETUP-GUIDE.md) — local run, Ubuntu/VMware server, GitHub secrets, Wiki, branch protection, first deploy.
 >
 > **Pipeline reference:** [docs/CI-CD-PIPELINE.md](docs/CI-CD-PIPELINE.md) — stages, security, artifacts, troubleshooting.
+>
+> **Presentation deck:** [HTML slides](docs/pipeline-presentation.html) · [PDF](docs/pipeline-presentation.pdf) — features and workflows overview.
 
 ### Prerequisites
 
 - Node.js >= 20.0.0
 - npm >= 10.0.0
+- Docker (optional, for local container runs)
 
 ### Development
 
@@ -86,28 +92,27 @@ npm run test:e2e
 # Build for production
 npm run build
 
-# Preview production build
+# Preview production build locally (Node)
 npm run preview
 
-# Start production server (used in EC2 deploy)
-npm start
+# Or serve the same dist via Docker (nginx)
+docker build -t enterprise-react-app .
+docker run --rm -p 4173:80 enterprise-react-app
 ```
 
-### EC2 Deployment
+### Staging deployment (Docker)
+
+Staging is deployed by CI: build-once `dist/` → GHCR image → `docker pull` / `docker run` on the host (`:4173` → container `:80`).
+
+Manual deploy on a host that already has Docker + GHCR login:
 
 ```bash
-# On EC2: install dependencies and build
-npm ci
-npm run build
-
-# Start app and keep it running
-npm install -g pm2
-pm2 start "npm run start" --name enterprise-react-app
-pm2 save
-
-# Run health checks
+export IMAGE=ghcr.io/<owner>/<repo>:<sha>
+IMAGE="$IMAGE" ./scripts/deploy.sh staging
 ./scripts/health-check.sh http://localhost:4173
 ```
+
+See [docs/SETUP-GUIDE.md](docs/SETUP-GUIDE.md) for Docker Engine install, `GHCR_PULL_TOKEN`, and PM2 cutover.
 
 ## 🔒 Security Features
 
@@ -138,14 +143,15 @@ Pushes to other branches (e.g. `features/test`) do **not** start this pipeline.
 
 ```
 1. Code Quality      → ESLint, Prettier, TypeScript checks
-2. Security Scan     → npm audit, TruffleHog, CodeQL, Trivy
+2. Security Scan     → npm audit, TruffleHog, CodeQL, Trivy (fs)
 2.5 Fix Decision     → Developer chooses auto fix or manual fix (no silent auto-fix)
 3. Unit Tests        → Vitest with coverage report artifact
 4. Build once        → dist + SBOM + attested release bundle
 5. E2E Tests         → Playwright against the exact build artifact
-6. Deploy Staging    → Promote prebuilt dist to staging EC2 (no remote rebuild)
-7. Failure Tickets   → Auto-create GitHub Issues when stages fail
-8. Wiki Report       → Publish final pipeline report to GitHub Wiki
+6. Docker image      → Package dist into nginx image, push to GHCR, Trivy image scan
+7. Deploy Staging    → docker pull/run on staging (host :4173)
+8. Failure Tickets   → Auto-create GitHub Issues when stages fail
+9. Wiki Report       → Publish final pipeline report to GitHub Wiki
 ```
 
 ### Staging vs production
@@ -167,10 +173,11 @@ Pushes to other branches (e.g. `features/test`) do **not** start this pipeline.
 
 | Control | Implementation |
 | --- | --- |
-| Build once | Single `npm run build` on CI; staging uses `USE_PREBUILT_DIST=true` |
+| Build once | Single `npm run build` on CI; Docker image packages that same `dist/` |
 | SBOM | CycloneDX JSON via `anchore/sbom-action` |
 | Upload artifact | `build-artifact` (`dist/`) + `app-dist-<sha>-bundle` (tarball, SBOM, SHA256SUMS) |
 | Attestation | GitHub Artifact Attestations (`actions/attest-build-provenance`) on the dist tarball |
+| Container | GHCR image from the same `dist/` (`:<sha>` + `:staging`); Trivy image scan |
 | E2E on artifact | Playwright downloads `build-artifact` and previews local `dist/` (not staging URL) |
 
 View attestations on the repo **Actions** run or **Deployments / Attestations** UI after a green build.
@@ -198,7 +205,7 @@ When a stage fails on `main`, the pipeline opens a **GitHub Issue** ticket (not 
 
 ### Final pipeline report (GitHub Wiki)
 
-After every `main` pipeline finishes, stage 8 publishes a complete report to the **GitHub Wiki**:
+After every `main` pipeline finishes, the wiki job publishes a complete report to the **GitHub Wiki**:
 
 - Per-run page: `Pipeline-Report-YYYY-MM-DD-run-<id>`
 - Index page: `Pipeline-Reports` (newest first, last 50 runs)
@@ -228,6 +235,8 @@ Create under **Settings → Environments**.
 | `STAGING_HOST` | Staging server hostname/IP (**or Tailscale IP / MagicDNS**) |
 | `STAGING_USER` | SSH username |
 | `STAGING_SSH_KNOWN_HOSTS` | Pinned host-key lines (required) |
+| `GHCR_PULL_TOKEN` | PAT with `read:packages` so staging can pull private GHCR images |
+| `GHCR_USERNAME` | Optional — GHCR login user (defaults to repository owner) |
 | `TAILSCALE_AUTHKEY` | Optional — Tailscale auth key for private VMs (skip public ports) |
 
 #### Repository secret

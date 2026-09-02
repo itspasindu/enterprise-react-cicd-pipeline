@@ -1,14 +1,15 @@
 import { Helmet } from 'react-helmet-async'
+import { TEST_IDS, PAGE_TITLES } from '../config/app-contract'
 
 function About() {
   return (
     <>
       <Helmet>
-        <title>About | Enterprise React App</title>
+        <title>{PAGE_TITLES.about}</title>
         <meta name="description" content="Learn about our enterprise application architecture" />
       </Helmet>
 
-      <div className="max-w-3xl mx-auto space-y-8">
+      <div className="max-w-3xl mx-auto space-y-8" data-testid={TEST_IDS.aboutPage}>
         <h1 className="text-4xl font-bold text-gradient">About This Project</h1>
 
         <div className="card">

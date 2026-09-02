@@ -153,10 +153,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SHA: ${{ github.sha }}
           ACTOR: ${{ github.actor }}
           EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           CODE_QUALITY: ${{ needs.code-quality.result }}
           SECURITY_SCAN: ${{ needs.security-scan.result }}
           UNIT_TESTS: skipped
@@ -352,18 +357,20 @@ jobs:
           retention-days: 7
 
 
-  deploy-staging:
-    name: Deploy to Staging
+  docker-build-push:
+    name: Build & Push Docker Image
     runs-on: ubuntu-latest
     needs: [build, e2e-tests]
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       github.event_name == 'workflow_dispatch'
-    environment:
-      name: staging
-    env:
-      # Secrets cannot be used in `if:`; map to env so Tailscale can be optional.
-      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -377,8 +384,71 @@ jobs:
       - name: Verify prebuilt dist
         run: |
           test -f dist/index.html
-          echo "Deploying artifact ${{ needs.build.outputs.short_sha }}"
+          echo "Packaging artifact ${{ needs.build.outputs.short_sha }} into container image"
           du -sh dist/
+
+      - name: Set image metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          REPO_LC="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${REPO_LC}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tags=${IMAGE}:${GITHUB_SHA},${IMAGE}:staging" >> "$GITHUB_OUTPUT"
+          echo "Image: ${IMAGE}:${GITHUB_SHA}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          provenance: false
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'image'
+          image-ref: ${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}
+          format: 'sarif'
+          output: 'trivy-image-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy image scan results
+        uses: github/codeql-action/upload-sarif@1b549b9259bda1cb5ddde3b41741a82a2d15a841 # v3.28.13
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-image-results.sarif'
+          category: trivy-image
+
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, e2e-tests, docker-build-push]
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
+    environment:
+      name: staging
+    env:
+      # Secrets cannot be used in `if:`; map to env so Tailscale can be optional.
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # Join Tailscale when TAILSCALE_AUTHKEY is set (private VMware / LAN hosts).
       # Leave the secret unset to skip (public IP / DNAT deploys).
@@ -411,7 +481,7 @@ jobs:
           echo "Pinned known_hosts entries:"
           awk '{print $1, $2}' ~/.ssh/known_hosts
 
-      - name: Create backup for rollback
+      - name: Ensure Docker on staging host
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
@@ -419,65 +489,54 @@ jobs:
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "${STAGING_USER}@${STAGING_HOST}" << 'EOF'
             set -e
-            # No sudo — CI has no TTY for password prompts.
-            # Pre-create both dirs on the server owned by the deploy user (see SETUP-GUIDE).
-            APP_DIR="/opt/enterprise-react-app"
-            BACKUP_DIR="/opt/enterprise-react-app_backup"
-
-            if [ ! -d "$APP_DIR" ]; then
-              echo "No existing deployment found to backup."
-              mkdir -p "$APP_DIR"
-              exit 0
-            fi
-
-            if [ ! -w "$APP_DIR" ]; then
-              echo "::error::$APP_DIR is not writable by $(whoami)."
-              echo "On the server: sudo chown -R \$USER:\$USER $APP_DIR $BACKUP_DIR"
-              ls -la /opt || true
+            if ! command -v docker >/dev/null 2>&1; then
+              echo "::error::Docker is not installed on the staging host."
+              echo "Install Docker Engine and add the deploy user to the docker group."
+              echo "See docs/SETUP-GUIDE.md"
               exit 1
             fi
-
-            mkdir -p "$BACKUP_DIR"
-            if [ ! -w "$BACKUP_DIR" ]; then
-              echo "::error::$BACKUP_DIR is not writable by $(whoami)."
-              echo "On the server:"
-              echo "  sudo mkdir -p $APP_DIR $BACKUP_DIR"
-              echo "  sudo chown -R \$USER:\$USER $APP_DIR $BACKUP_DIR"
+            if ! docker info >/dev/null 2>&1; then
+              echo "::error::Cannot talk to Docker daemon (permission denied?)."
+              echo "On the server: sudo usermod -aG docker \$USER && re-login"
               exit 1
             fi
-
-            echo "Creating backup of current deployment..."
-            # Sync into existing backup dir (avoids creating a new dir under /opt).
-            rsync -a --delete "${APP_DIR}/" "${BACKUP_DIR}/"
-            echo "Backup complete."
+            mkdir -p /opt/enterprise-react-app/scripts
+            echo "Docker is ready on staging."
           EOF
 
-      - name: Sync app + prebuilt dist to staging EC2
+      - name: Sync deploy scripts to staging
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
         run: |
-          rsync -az --delete \
+          rsync -az \
             -e "ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts" \
-            --exclude '.git' \
-            --exclude 'node_modules' \
-            --exclude 'coverage' \
-            --exclude 'playwright-report' \
-            --exclude 'test-results' \
-            --exclude 'release' \
-            ./ "${STAGING_USER}@${STAGING_HOST}:/opt/enterprise-react-app/"
+            ./scripts/deploy.sh ./scripts/health-check.sh \
+            "${STAGING_USER}@${STAGING_HOST}:/opt/enterprise-react-app/scripts/"
 
-      - name: Deploy prebuilt artifact on staging
+      - name: Pull and run container on staging
         env:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          IMAGE: ${{ needs.docker-build-push.outputs.image }}:${{ github.sha }}
         run: |
+          set -euo pipefail
+          if [ -z "${GHCR_PULL_TOKEN}" ]; then
+            echo "::error::GHCR_PULL_TOKEN is required on the staging Environment (PAT with read:packages)."
+            exit 1
+          fi
+          GHCR_USER="${GHCR_USERNAME:-${{ github.repository_owner }}}"
+
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            "${STAGING_USER}@${STAGING_HOST}" << 'EOF'
-            set -e
+            "${STAGING_USER}@${STAGING_HOST}" \
+            "GHCR_USER=$(printf %q "$GHCR_USER") GHCR_PULL_TOKEN=$(printf %q "$GHCR_PULL_TOKEN") IMAGE=$(printf %q "$IMAGE") bash -s" << 'EOF'
+            set -euo pipefail
+            echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             cd /opt/enterprise-react-app
             chmod +x ./scripts/deploy.sh ./scripts/health-check.sh
-            USE_PREBUILT_DIST=true ./scripts/deploy.sh staging
+            IMAGE="$IMAGE" ./scripts/deploy.sh staging
           EOF
 
       - name: Run health checks
@@ -485,7 +544,7 @@ jobs:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
         run: |
           echo "Waiting for deployment to stabilize..."
-          sleep 15
+          sleep 10
 
           MAX_RETRIES=10
           RETRY_COUNT=0
@@ -530,24 +589,87 @@ jobs:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
         run: |
-          echo "Deployment or tests failed. Initiating rollback..."
+          echo "Deployment or tests failed. Initiating container rollback..."
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "${STAGING_USER}@${STAGING_HOST}" << 'EOF'
-            if [ -d "/opt/enterprise-react-app_backup" ]; then
-              echo "Restoring from backup..."
-              # Sync backup back into app dir (no sudo; both dirs owned by deploy user).
-              rsync -a --delete /opt/enterprise-react-app_backup/ /opt/enterprise-react-app/
-              cd /opt/enterprise-react-app
-
-              echo "Restarting application with previous version..."
-              pm2 delete "enterprise-react-app" >/dev/null 2>&1 || true
-              pm2 start "npm run start -- --host 0.0.0.0 --port 4173" --name "enterprise-react-app"
-              pm2 save
-              echo "Rollback complete."
-            else
-              echo "No backup found. Cannot rollback."
+            set -e
+            STATE_DIR="/opt/enterprise-react-app"
+            APP_NAME="enterprise-react-app"
+            PREV_FILE="${STATE_DIR}/previous-image.txt"
+            if [ ! -f "$PREV_FILE" ]; then
+              echo "No previous-image.txt found. Cannot rollback."
+              exit 0
             fi
+            PREV_IMAGE="$(cat "$PREV_FILE")"
+            if [ -z "$PREV_IMAGE" ]; then
+              echo "previous-image.txt is empty. Cannot rollback."
+              exit 0
+            fi
+            echo "Rolling back to $PREV_IMAGE"
+            docker stop "$APP_NAME" >/dev/null 2>&1 || true
+            docker rm "$APP_NAME" >/dev/null 2>&1 || true
+            docker run -d \
+              --restart unless-stopped \
+              --name "$APP_NAME" \
+              -p 4173:80 \
+              "$PREV_IMAGE"
+            echo "$PREV_IMAGE" > "${STATE_DIR}/current-image.txt"
+            echo "Rollback complete."
           EOF
+
+
+  create-pr-failure-ticket:
+    name: Create PR Failure Ticket
+    runs-on: ubuntu-latest
+    needs:
+      - code-quality
+      - security-scan
+      - unit-tests
+      - build
+      - e2e-tests
+    if: |
+      always() &&
+      !cancelled() &&
+      github.event_name == 'pull_request' &&
+      (
+        needs.code-quality.result == 'failure' ||
+        needs.security-scan.result == 'failure' ||
+        needs.unit-tests.result == 'failure' ||
+        needs.build.result == 'failure' ||
+        needs.e2e-tests.result == 'failure'
+      )
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Create GitHub Issue for failed PR checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: pull_request
+          REF_NAME: ${{ github.head_ref }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          COMMIT_MESSAGE: ${{ github.event.pull_request.title }}
+          CODE_QUALITY: ${{ needs.code-quality.result }}
+          SECURITY_SCAN: ${{ needs.security-scan.result }}
+          UNIT_TESTS: ${{ needs.unit-tests.result }}
+          BUILD: ${{ needs.build.result }}
+          E2E_TESTS: ${{ needs.e2e-tests.result }}
+          DOCKER_BUILD_PUSH: skipped
+          DEPLOY_STAGING: skipped
+        run: |
+          chmod +x ./scripts/create-failure-ticket.sh
+          ./scripts/create-failure-ticket.sh
 
 
   create-failure-ticket:
@@ -559,6 +681,7 @@ jobs:
       - unit-tests
       - build
       - e2e-tests
+      - docker-build-push
       - deploy-staging
     if: |
       always() &&
@@ -571,6 +694,7 @@ jobs:
         needs.unit-tests.result == 'failure' ||
         needs.build.result == 'failure' ||
         needs.e2e-tests.result == 'failure' ||
+        needs.docker-build-push.result == 'failure' ||
         needs.deploy-staging.result == 'failure'
       )
     permissions:
@@ -584,15 +708,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SHA: ${{ github.sha }}
           ACTOR: ${{ github.actor }}
           EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           CODE_QUALITY: ${{ needs.code-quality.result }}
           SECURITY_SCAN: ${{ needs.security-scan.result }}
           UNIT_TESTS: ${{ needs.unit-tests.result }}
           BUILD: ${{ needs.build.result }}
           E2E_TESTS: ${{ needs.e2e-tests.result }}
+          DOCKER_BUILD_PUSH: ${{ needs.docker-build-push.result }}
           DEPLOY_STAGING: ${{ needs.deploy-staging.result }}
         run: |
           chmod +x ./scripts/create-failure-ticket.sh
@@ -609,6 +739,7 @@ jobs:
       - unit-tests
       - build
       - e2e-tests
+      - docker-build-push
       - deploy-staging
       - create-failure-ticket
     if: |
@@ -632,13 +763,16 @@ jobs:
           SHA: ${{ github.sha }}
           ACTOR: ${{ github.actor }}
           EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
           WORKFLOW_NAME: ${{ github.workflow }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           CODE_QUALITY: ${{ needs.code-quality.result }}
           SECURITY_SCAN: ${{ needs.security-scan.result }}
           AWAIT_FIX_DECISION: ${{ needs.await-fix-decision.result }}
           UNIT_TESTS: ${{ needs.unit-tests.result }}
           BUILD: ${{ needs.build.result }}
           E2E_TESTS: ${{ needs.e2e-tests.result }}
+          DOCKER_BUILD_PUSH: ${{ needs.docker-build-push.result }}
           DEPLOY_STAGING: ${{ needs.deploy-staging.result }}
           FAILURE_TICKET: ${{ needs.create-failure-ticket.result }}
         run: |

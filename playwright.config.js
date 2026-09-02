@@ -20,6 +20,7 @@ export default defineConfig({
     video: 'on-first-retry',
   },
   projects: [
+    // Same contract-based smoke tests on every browser — no per-platform test files.
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
