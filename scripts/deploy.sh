@@ -65,6 +65,42 @@ echo "Stopping existing container (if any)..."
 docker stop "$APP_NAME" >/dev/null 2>&1 || true
 docker rm "$APP_NAME" >/dev/null 2>&1 || true
 
+# Free host port if an older PM2 / Node preview (or other process) still holds it.
+free_port() {
+    local port="$1"
+    local pids=""
+
+    if command -v ss >/dev/null 2>&1; then
+        pids="$(ss -tlnp "sport = :${port}" 2>/dev/null | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | sort -u || true)"
+    elif command -v lsof >/dev/null 2>&1; then
+        pids="$(lsof -t -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
+    fi
+
+    if command -v pm2 >/dev/null 2>&1; then
+        echo "Stopping PM2 process '${APP_NAME}' (if running)..."
+        pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
+        pm2 save >/dev/null 2>&1 || true
+    fi
+
+    if [ -n "${pids}" ]; then
+        echo "Port ${port} still in use by PID(s): ${pids} — stopping..."
+        # shellcheck disable=SC2086
+        kill ${pids} >/dev/null 2>&1 || true
+        sleep 2
+        # shellcheck disable=SC2086
+        kill -9 ${pids} >/dev/null 2>&1 || true
+    fi
+
+    if command -v ss >/dev/null 2>&1 && ss -tln "sport = :${port}" 2>/dev/null | grep -q ":${port}"; then
+        echo "Error: port ${port} is still in use after cleanup."
+        ss -tlnp "sport = :${port}" || true
+        exit 1
+    fi
+}
+
+echo "Ensuring host port $PORT is free..."
+free_port "$PORT"
+
 echo "Starting container on host port $PORT -> container 80..."
 docker run -d \
     --restart unless-stopped \

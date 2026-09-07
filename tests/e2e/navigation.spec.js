@@ -7,12 +7,12 @@ import {
   ROUTES,
   CONTACT_FORM,
   NOT_FOUND_PATH,
-  PAGE_TITLES,
 } from './helpers/navigation.js'
 
 /**
- * Behavior-focused E2E: asserts routes, navigation, and forms via shared
- * app-contract.js — not marketing copy. Runs on all browser projects in CI.
+ * Smoke E2E — tests behavior + stable data-testid markers, NOT page copy.
+ * Change headlines/paragraphs freely without editing this file.
+ * Only update src/config/app-contract.js when routes, nav labels, or form fields change.
  */
 test.describe('Application smoke @cross-browser', () => {
   test.beforeEach(async ({ page }) => {
@@ -20,7 +20,7 @@ test.describe('Application smoke @cross-browser', () => {
   })
 
   test('home route loads', async ({ page }) => {
-    await expect(page).toHaveTitle(PAGE_TITLES.home)
+    // Marker only — do not assert title/hero text (those change often)
     await expectPageMarker(page, TEST_IDS.homePage)
   })
 
@@ -48,8 +48,9 @@ test.describe('Application smoke @cross-browser', () => {
     const menuButton = page.getByTestId(TEST_IDS.mobileMenuToggle)
     await expect(menuButton).toBeVisible()
     await menuButton.click()
+    const homeLabel = NAV_LINKS.find(link => link.path === ROUTES.home)?.label ?? 'Home'
     await expect(
-      page.getByTestId(TEST_IDS.mainNav).getByRole('link', { name: 'Home' }).filter({ visible: true })
+      page.getByTestId(TEST_IDS.mainNav).getByRole('link', { name: homeLabel }).filter({ visible: true })
     ).toBeVisible()
   })
 
@@ -62,7 +63,7 @@ test.describe('Application smoke @cross-browser', () => {
     await page.getByLabel(CONTACT_FORM.labels.message).fill('E2E test message')
     await page.getByRole('button', { name: CONTACT_FORM.submit }).click()
 
+    // Success state via test id — not the success message text
     await expect(page.getByTestId(TEST_IDS.contactSuccess)).toBeVisible()
-    await expect(page.getByText(CONTACT_FORM.successHeading)).toBeVisible()
   })
 })
