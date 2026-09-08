@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # ==========================================
-# Enterprise Deployment Script (Docker)
-# Pulls a CI-built image from GHCR and runs it.
+# Staging/production deploy (Docker)
+# IMAGE is loaded on the host first (CI streams via docker save/load)
+# or pulled from GHCR when SKIP_PULL is unset and the host can reach ghcr.io.
 # ==========================================
 
 ENVIRONMENT="${1:-staging}"
@@ -13,12 +14,14 @@ STATE_DIR="${STATE_DIR:-/opt/enterprise-react-app}"
 PREVIOUS_IMAGE_FILE="${STATE_DIR}/previous-image.txt"
 CURRENT_IMAGE_FILE="${STATE_DIR}/current-image.txt"
 IMAGE="${IMAGE:-}"
+SKIP_PULL="${SKIP_PULL:-0}"
 
 echo "=========================================="
 echo "Deploying to: $ENVIRONMENT"
 echo "App Name: $APP_NAME"
 echo "Port: $PORT"
 echo "Image: ${IMAGE:-<not set>}"
+echo "Skip pull: $SKIP_PULL"
 echo "=========================================="
 
 if [ "$ENVIRONMENT" != "staging" ] && [ "$ENVIRONMENT" != "production" ]; then
@@ -27,7 +30,7 @@ if [ "$ENVIRONMENT" != "staging" ] && [ "$ENVIRONMENT" != "production" ]; then
 fi
 
 if [ -z "$IMAGE" ]; then
-    echo "Error: IMAGE is required (e.g. ghcr.io/owner/repo:abc1234)"
+    echo "Error: IMAGE is required (e.g. ghcr.io/owner/platform:2026.09.1)"
     exit 1
 fi
 
@@ -48,7 +51,10 @@ mkdir -p "$STATE_DIR"
 
 # Remember the currently running image for rollback before we replace it.
 if docker inspect "$APP_NAME" >/dev/null 2>&1; then
-    PREV_IMAGE="$(docker inspect --format='{{.Image}}' "$APP_NAME" 2>/dev/null || true)"
+    PREV_IMAGE="$(docker inspect --format='{{.Config.Image}}' "$APP_NAME" 2>/dev/null || true)"
+    if [ -z "${PREV_IMAGE:-}" ]; then
+        PREV_IMAGE="$(docker inspect --format='{{.Image}}' "$APP_NAME" 2>/dev/null || true)"
+    fi
     if [ -n "${PREV_IMAGE:-}" ]; then
         echo "$PREV_IMAGE" > "$PREVIOUS_IMAGE_FILE"
         echo "Recorded previous image for rollback: $PREV_IMAGE"
@@ -58,8 +64,16 @@ elif [ -f "$CURRENT_IMAGE_FILE" ]; then
     echo "Recorded previous image from state file."
 fi
 
-echo "Pulling image..."
-docker pull "$IMAGE"
+if [ "$SKIP_PULL" != "1" ] && [ "$SKIP_PULL" != "true" ]; then
+    echo "Pulling image from registry..."
+    docker pull "$IMAGE"
+else
+    echo "Skipping registry pull (image should already be loaded on this host)."
+    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        echo "Error: image '$IMAGE' is not present locally. Load it first (docker load) or unset SKIP_PULL."
+        exit 1
+    fi
+fi
 
 echo "Stopping existing container (if any)..."
 docker stop "$APP_NAME" >/dev/null 2>&1 || true

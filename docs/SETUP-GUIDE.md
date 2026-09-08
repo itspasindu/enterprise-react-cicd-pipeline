@@ -269,7 +269,7 @@ Used by **Deploy to Staging**.
 | `STAGING_HOST` | Public IP/DNS **or Tailscale IP / MagicDNS** (see §5) |
 | `STAGING_USER` | Linux user that owns `/opt/enterprise-react-app` and can run Docker |
 | `STAGING_SSH_KNOWN_HOSTS` | Output of `ssh-keyscan` (over Tailscale if using Option A) |
-| `GHCR_PULL_TOKEN` | PAT (classic or fine-grained) with **`read:packages`** so the host can pull private GHCR images |
+| `GHCR_PULL_TOKEN` | *(Optional)* PAT with `read:packages`. Deploy pulls on the GitHub runner and streams the image over SSH, so the VM does **not** need outbound access to `ghcr.io`. |
 | `GHCR_USERNAME` | *(Optional)* GHCR login user; defaults to repository owner |
 | `TAILSCALE_AUTHKEY` | *(Optional)* Tailscale auth key for private VMs |
 
@@ -475,7 +475,8 @@ Or: **Actions → Developer Fix Choice → Run workflow**.
 | Deploy: Permission denied (publickey) | Wrong key/user | Match `STAGING_USER` and key in `authorized_keys` |
 | Health check fails after deploy | Port 4173 blocked or container down | `docker ps`; `docker logs enterprise-react-app`; open 4173 |
 | Deploy: Docker permission denied | User not in `docker` group | `sudo usermod -aG docker $USER` then re-login |
-| Deploy: GHCR pull unauthorized | Missing/invalid `GHCR_PULL_TOKEN` | Add PAT with `read:packages` to `staging` |
+| Deploy: GHCR DNS timeout on VM | VM cannot resolve/reach `ghcr.io` (common on VMware NAT) | Use latest workflow: image is pulled on the Actions runner and streamed over SSH — VM needs no GHCR access |
+| Deploy: port 4173 already in use | PM2 or leftover process | `pm2 delete enterprise-react-app`; `sudo fuser -k 4173/tcp` |
 | Wiki publish fails | Wiki off or bad token | Enable Wiki; recreate `WIKI_TOKEN` |
 | PR checks missing in branch protection | No PR run yet | Open one PR and wait for jobs |
 | `ci` environment waits for approval | Required reviewers on `ci` | Disable reviewers on `ci` |
@@ -508,7 +509,7 @@ PR → main
   (no Docker push / deploy)
 
 Merge / push → main
-  Same gates → Docker image → GHCR → Deploy Staging (docker pull/run :4173)
+  Same gates → Docker image → GHCR → Deploy Staging (runner pulls image, SSH `docker load`, run :4173)
             → Failure ticket (if fail)
             → Wiki report
 ```

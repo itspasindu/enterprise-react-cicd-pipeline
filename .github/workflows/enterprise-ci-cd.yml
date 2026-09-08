@@ -498,6 +498,9 @@ jobs:
       github.event_name == 'workflow_dispatch'
     environment:
       name: staging
+    permissions:
+      contents: read
+      packages: read
     env:
       # Secrets cannot be used in `if:`; map to env so Tailscale can be optional.
       TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
@@ -569,29 +572,47 @@ jobs:
             ./scripts/deploy.sh ./scripts/health-check.sh \
             "${STAGING_USER}@${STAGING_HOST}:/opt/enterprise-react-app/scripts/"
 
-      - name: Pull and run container on staging
+      - name: Transfer image over SSH and run on staging
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
+          IMAGE: ${{ needs.docker-build-push.outputs.image_ref }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          IMAGE: ${{ needs.docker-build-push.outputs.image_ref }}
         run: |
           set -euo pipefail
-          if [ -z "${GHCR_PULL_TOKEN}" ]; then
-            echo "::error::GHCR_PULL_TOKEN is required on the staging Environment (PAT with read:packages)."
+          if [ -z "${IMAGE}" ]; then
+            echo "::error::docker-build-push did not output image_ref"
             exit 1
           fi
-          GHCR_USER="${GHCR_USERNAME:-${{ github.repository_owner }}}"
 
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            "${STAGING_USER}@${STAGING_HOST}" \
-            "GHCR_USER=$(printf %q "$GHCR_USER") GHCR_PULL_TOKEN=$(printf %q "$GHCR_PULL_TOKEN") IMAGE=$(printf %q "$IMAGE") bash -s" << 'EOF'
+          # Pull on the GitHub runner (has working DNS to ghcr.io), then stream
+          # to the VM. VMware/NAT hosts often cannot resolve or reach ghcr.io.
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          if [ -n "${GHCR_PULL_TOKEN}" ]; then
+            GHCR_USER="${GHCR_USERNAME:-${GITHUB_REPOSITORY_OWNER}}"
+            echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin || true
+          fi
+
+          echo "Pulling ${IMAGE} on runner..."
+          docker pull "$IMAGE"
+
+          SSH=(ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
+          REMOTE="${STAGING_USER}@${STAGING_HOST}"
+
+          echo "Streaming image to staging via SSH (docker save | docker load)..."
+          docker save "$IMAGE" | gzip | "${SSH[@]}" "$REMOTE" 'gunzip | docker load'
+
+          echo "Starting container on staging (no registry pull on the VM)..."
+          "${SSH[@]}" "$REMOTE" \
+            "IMAGE=$(printf %q "$IMAGE") SKIP_PULL=1 bash -s" << 'EOF'
             set -euo pipefail
-            echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             cd /opt/enterprise-react-app
             chmod +x ./scripts/deploy.sh ./scripts/health-check.sh
-            IMAGE="$IMAGE" ./scripts/deploy.sh staging
+            IMAGE="$IMAGE" SKIP_PULL=1 ./scripts/deploy.sh staging
           EOF
 
       - name: Run health checks
@@ -650,6 +671,7 @@ jobs:
             set -e
             STATE_DIR="/opt/enterprise-react-app"
             APP_NAME="enterprise-react-app"
+            PORT=4173
             PREV_FILE="${STATE_DIR}/previous-image.txt"
             if [ ! -f "$PREV_FILE" ]; then
               echo "No previous-image.txt found. Cannot rollback."
@@ -663,10 +685,20 @@ jobs:
             echo "Rolling back to $PREV_IMAGE"
             docker stop "$APP_NAME" >/dev/null 2>&1 || true
             docker rm "$APP_NAME" >/dev/null 2>&1 || true
+            if command -v pm2 >/dev/null 2>&1; then
+              pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
+            fi
+            PIDS="$(ss -tlnp "sport = :${PORT}" 2>/dev/null | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | sort -u || true)"
+            if [ -n "$PIDS" ]; then
+              echo "Freeing port ${PORT} (PIDs: $PIDS)"
+              kill $PIDS >/dev/null 2>&1 || true
+              sleep 2
+              kill -9 $PIDS >/dev/null 2>&1 || true
+            fi
             docker run -d \
               --restart unless-stopped \
               --name "$APP_NAME" \
-              -p 4173:80 \
+              -p "${PORT}:80" \
               "$PREV_IMAGE"
             echo "$PREV_IMAGE" > "${STATE_DIR}/current-image.txt"
             echo "Rollback complete."
