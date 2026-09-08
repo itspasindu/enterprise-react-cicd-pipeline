@@ -262,7 +262,8 @@ Tests run against the **exact `dist/` artifact** from Stage 4:
 ```text
 1. Download build-artifact (same dist/ as E2E)
 2. docker build (nginx + dist + nginx.conf)
-3. Push to GHCR: ghcr.io/<owner>/<repo>:<full_sha> and :staging
+3. Push to GHCR as CalVer: `ghcr.io/<owner>/platform:YYYY.MM.N` (+ `:staging`, `:sha-<short>`)
+4. Deploy uses the exact CalVer tag from the build job output
 4. Trivy image scan (SARIF → Security tab)
 ```
 
@@ -284,7 +285,7 @@ Tests run against the **exact `dist/` artifact** from Stage 4:
 2. Verify Docker Engine + docker group permissions
 3. Sync scripts/deploy.sh + health-check.sh to /opt/enterprise-react-app/scripts/
 4. docker login ghcr.io (GHCR_PULL_TOKEN)
-5. IMAGE=ghcr.io/...:<sha> ./scripts/deploy.sh staging
+5. IMAGE=ghcr.io/<owner>/platform:YYYY.MM.N ./scripts/deploy.sh staging
 6. Health check (HTTP 200 on :4173)
 7. Smoke tests (/, /about, /contact + header warnings)
 8. On failure → docker run previous image from previous-image.txt
@@ -443,7 +444,8 @@ Posts a checklist on the Issue and assigns the actor. No code changes are made b
 docker run -d --restart unless-stopped \
   --name enterprise-react-app \
   -p 4173:80 \
-  ghcr.io/<owner>/<repo>:<sha>
+  ghcr.io/<owner>/platform:YYYY.MM.N
+  (+ :staging, :sha-<short>)
 ```
 
 App is served at: `http://<STAGING_HOST>:4173` (nginx in the container listens on 80).
@@ -592,7 +594,7 @@ Download from **Actions → workflow run → Artifacts**.
 | --- | --- | --- |
 | `build-artifact` | E2E, Docker image | Exact production build |
 | `app-dist-<sha>-bundle` | Compliance/audit | Immutable tarball + SBOM + checksums |
-| GHCR `:<sha>` / `:staging` | Staging deploy | nginx image of the same `dist/` |
+| GHCR `platform:YYYY.MM.N` | Staging deploy | nginx image of the same `dist/` |
 | `coverage-report` | Developers | Unit test coverage |
 | `playwright-report` | QA/debug | E2E HTML report |
 
@@ -605,7 +607,7 @@ View **attestations** on the Actions run or repository **Attestations** UI.
 ### `scripts/deploy.sh`
 
 ```bash
-IMAGE=ghcr.io/owner/repo:abc1234 ./scripts/deploy.sh staging
+IMAGE=ghcr.io/owner/platform:2026.09.1 ./scripts/deploy.sh staging
 ```
 
 Steps: record previous image → `docker pull` → stop/rm container → `docker run -p 4173:80` → health check.
