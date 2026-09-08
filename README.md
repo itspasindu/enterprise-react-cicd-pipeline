@@ -107,7 +107,8 @@ Staging is deployed by CI: build-once `dist/` → GHCR image → `docker pull` /
 Manual deploy on a host that already has Docker + GHCR login:
 
 ```bash
-export IMAGE=ghcr.io/<owner>/<repo>:<sha>
+export IMAGE=ghcr.io/<owner>/platform:YYYY.MM.N
+# e.g. ghcr.io/myorg/platform:2026.09.1
 IMAGE="$IMAGE" ./scripts/deploy.sh staging
 ./scripts/health-check.sh http://localhost:4173
 ```
@@ -177,7 +178,7 @@ Pushes to other branches (e.g. `features/test`) do **not** start this pipeline.
 | SBOM | CycloneDX JSON via `anchore/sbom-action` |
 | Upload artifact | `build-artifact` (`dist/`) + `app-dist-<sha>-bundle` (tarball, SBOM, SHA256SUMS) |
 | Attestation | GitHub Artifact Attestations (`actions/attest-build-provenance`) on the dist tarball |
-| Container | GHCR image from the same `dist/` (`:<sha>` + `:staging`); Trivy image scan |
+| Container | GHCR package `platform` with CalVer `YYYY.MM.N` (+ `:staging`, `:sha-<short>`); Trivy image scan |
 | E2E on artifact | Playwright downloads `build-artifact` and previews local `dist/` (not staging URL) |
 
 View attestations on the repo **Actions** run or **Deployments / Attestations** UI after a green build.

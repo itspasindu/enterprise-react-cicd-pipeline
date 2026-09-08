@@ -370,6 +370,8 @@ jobs:
       security-events: write
     outputs:
       image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.meta.outputs.version }}
+      image_ref: ${{ steps.meta.outputs.image_ref }}
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - name: Checkout code
@@ -387,15 +389,64 @@ jobs:
           echo "Packaging artifact ${{ needs.build.outputs.short_sha }} into container image"
           du -sh dist/
 
-      - name: Set image metadata
+      - name: Set CalVer image metadata (platform:YYYY.MM.N)
         id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          REPO_LC="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
-          IMAGE="ghcr.io/${REPO_LC}"
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "tags=${IMAGE}:${GITHUB_SHA},${IMAGE}:staging" >> "$GITHUB_OUTPUT"
-          echo "Image: ${IMAGE}:${GITHUB_SHA}"
+          OWNER_LC="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          # Package name is "platform" → ghcr.io/<owner>/platform:YYYY.MM.N
+          IMAGE="ghcr.io/${OWNER_LC}/platform"
+          MONTH="$(date -u +%Y.%m)"
+
+          next_build_number() {
+            local month="$1"
+            local max_n=0
+            local tags=""
+            local line n
+
+            # User-owned or org-owned package versions (ignore errors on first publish)
+            tags="$(
+              gh api --paginate \
+                "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/platform/versions" \
+                --jq '.[].metadata.container.tags[]?' 2>/dev/null \
+              || gh api --paginate \
+                "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/platform/versions" \
+                --jq '.[].metadata.container.tags[]?' 2>/dev/null \
+              || true
+            )"
+
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              case "$line" in
+                "${month}."*)
+                  n="${line#"${month}."}"
+                  if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max_n" ]; then
+                    max_n="$n"
+                  fi
+                  ;;
+              esac
+            done <<< "$tags"
+
+            echo $((max_n + 1))
+          }
+
+          N="$(next_build_number "$MONTH")"
+          VERSION="${MONTH}.${N}"
+          IMAGE_REF="${IMAGE}:${VERSION}"
+
+          {
+            echo "image=${IMAGE}"
+            echo "version=${VERSION}"
+            echo "image_ref=${IMAGE_REF}"
+            # CalVer release + floating staging alias (sha kept for audit/rollback)
+            echo "tags=${IMAGE_REF},${IMAGE}:staging,${IMAGE}:sha-${GITHUB_SHA:0:7}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Package: ${IMAGE}"
+          echo "Version tag: ${VERSION}  (platform:YYYY.MM.N)"
+          echo "Will push: ${IMAGE_REF}, ${IMAGE}:staging, ${IMAGE}:sha-${GITHUB_SHA:0:7}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
@@ -414,13 +465,17 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=platform
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
           provenance: false
 
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: 'image'
-          image-ref: ${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}
+          image-ref: ${{ steps.meta.outputs.image_ref }}
           format: 'sarif'
           output: 'trivy-image-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -520,7 +575,7 @@ jobs:
           STAGING_USER: ${{ secrets.STAGING_USER }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          IMAGE: ${{ needs.docker-build-push.outputs.image }}:${{ github.sha }}
+          IMAGE: ${{ needs.docker-build-push.outputs.image_ref }}
         run: |
           set -euo pipefail
           if [ -z "${GHCR_PULL_TOKEN}" ]; then
