@@ -261,13 +261,14 @@ Tests run against the **exact `dist/` artifact** from Stage 4:
 
 ```text
 1. Download build-artifact (same dist/ as E2E)
-2. docker build (nginx + dist + nginx.conf)
+2. docker build (nginx-unprivileged + dist + nginx.conf) with Buildx GHA cache
 3. Push to GHCR as CalVer: `ghcr.io/<owner>/platform:YYYY.MM.N` (+ `:staging`, `:sha-<short>`)
-4. Deploy uses the exact CalVer tag from the build job output
-4. Trivy image scan (SARIF → Security tab)
+4. Record immutable digest ref: `ghcr.io/<owner>/platform@sha256:…`
+5. Trivy image scan (SARIF) + fail pipeline on CRITICAL/HIGH (ignore-unfixed)
+6. Deploy uses the digest ref from the build job output
 ```
 
-**Important:** The image packages the CI-built `dist/` — there is **no** second Vite build inside Docker in the pipeline.
+**Important:** The image packages the CI-built `dist/` — there is **no** second Vite build inside Docker in the pipeline. Container listens on **8080** (non-root).
 
 ---
 
@@ -284,14 +285,17 @@ Tests run against the **exact `dist/` artifact** from Stage 4:
 1. SSH to staging (pinned known_hosts; optional Tailscale)
 2. Verify Docker Engine + docker group permissions
 3. Sync scripts/deploy.sh + health-check.sh to /opt/enterprise-react-app/scripts/
-4. docker login ghcr.io (GHCR_PULL_TOKEN)
-5. IMAGE=ghcr.io/<owner>/platform:YYYY.MM.N ./scripts/deploy.sh staging
-6. Health check (HTTP 200 on :4173)
+4. Runner pulls **digest** image from GHCR, streams via `docker save | gzip` over SSH → `docker load`
+5. IMAGE=<digest-ref> SKIP_PULL=1 ./scripts/deploy.sh staging
+   - frees :4173 if needed
+   - hardened run: read-only, cap-drop ALL, memory/CPU limits, non-root image on 8080
+   - waits for Docker HEALTHCHECK, then HTTP checks
+6. Health check from runner (HTTP 200 on :4173)
 7. Smoke tests (/, /about, /contact + header warnings)
-8. On failure → docker run previous image from previous-image.txt
+8. On failure → free port + hardened rollback to previous image
 ```
 
-**Important:** Staging runs the nginx container published to GHCR. Host port **4173** maps to container port **80**.
+**Important:** Staging does **not** need outbound access to `ghcr.io` (common for VMware NAT). The Actions runner pulls the **immutable digest** and transfers it over SSH. Host port **4173** maps to container port **8080**.
 
 **Rollback:** If deploy or post-deploy checks fail, the job starts the image recorded in `/opt/enterprise-react-app/previous-image.txt`.
 
@@ -441,18 +445,22 @@ Posts a checklist on the Issue and assigns the actor. No code changes are made b
 ### Docker process
 
 ```bash
+# CI uses digest + hardened flags (see scripts/deploy.sh)
 docker run -d --restart unless-stopped \
   --name enterprise-react-app \
-  -p 4173:80 \
-  ghcr.io/<owner>/platform:YYYY.MM.N
-  (+ :staging, :sha-<short>)
+  --read-only \
+  --tmpfs /tmp --tmpfs /var/cache/nginx --tmpfs /var/run \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --memory 256m --cpus 0.50 --pids-limit 256 \
+  -p 4173:8080 \
+  ghcr.io/<owner>/platform@sha256:<digest>
 ```
 
-App is served at: `http://<STAGING_HOST>:4173` (nginx in the container listens on 80).
+App is served at: `http://<STAGING_HOST>:4173` (nginx listens on **8080** as non-root).
 
 ### Rollback
 
-Before replacing the running container, `deploy.sh` writes the current image id/ref to `previous-image.txt`. On deploy/health failure, CI starts that previous image again.
+Before replacing the running container, `deploy.sh` writes the current image id/ref to `previous-image.txt`. On deploy/health failure, CI starts that previous image again (hardened flags; legacy `:80` images fall back automatically).
 
 ---
 
@@ -607,10 +615,11 @@ View **attestations** on the Actions run or repository **Attestations** UI.
 ### `scripts/deploy.sh`
 
 ```bash
-IMAGE=ghcr.io/owner/platform:2026.09.1 ./scripts/deploy.sh staging
+IMAGE=ghcr.io/owner/platform@sha256:<digest> ./scripts/deploy.sh staging
+# or: IMAGE=ghcr.io/owner/platform:2026.09.1 SKIP_PULL=0 ./scripts/deploy.sh staging
 ```
 
-Steps: record previous image → `docker pull` → stop/rm container → `docker run -p 4173:80` → health check.
+Steps: record previous image → optional pull → stop/rm → free :4173 → hardened `docker run -p 4173:8080` → wait HEALTHCHECK → HTTP health check.
 
 ### `scripts/health-check.sh`
 

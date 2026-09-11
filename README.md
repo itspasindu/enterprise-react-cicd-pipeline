@@ -95,25 +95,25 @@ npm run build
 # Preview production build locally (Node)
 npm run preview
 
-# Or serve the same dist via Docker (nginx)
-docker build -t enterprise-react-app .
-docker run --rm -p 4173:80 enterprise-react-app
+# Or serve the same dist via Docker (non-root nginx on 8080)
+docker build -t platform:local .
+docker run --rm -p 4173:8080 platform:local
 ```
 
 ### Staging deployment (Docker)
 
-Staging is deployed by CI: build-once `dist/` → GHCR image → `docker pull` / `docker run` on the host (`:4173` → container `:80`).
+Staging is deployed by CI: build-once `dist/` → GHCR CalVer + digest → SSH `docker load` → hardened `docker run` (`:4173` → container `:8080`).
 
 Manual deploy on a host that already has Docker + GHCR login:
 
 ```bash
-export IMAGE=ghcr.io/<owner>/platform:YYYY.MM.N
-# e.g. ghcr.io/myorg/platform:2026.09.1
+export IMAGE=ghcr.io/<owner>/platform@sha256:<digest>
+# or CalVer: ghcr.io/<owner>/platform:YYYY.MM.N
 IMAGE="$IMAGE" ./scripts/deploy.sh staging
 ./scripts/health-check.sh http://localhost:4173
 ```
 
-See [docs/SETUP-GUIDE.md](docs/SETUP-GUIDE.md) for Docker Engine install, `GHCR_PULL_TOKEN`, and PM2 cutover.
+See [docs/SETUP-GUIDE.md](docs/SETUP-GUIDE.md) for Docker Engine install and staging secrets.
 
 ## 🔒 Security Features
 

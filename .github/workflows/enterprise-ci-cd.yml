@@ -368,11 +368,13 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: write
     outputs:
       image: ${{ steps.meta.outputs.image }}
       version: ${{ steps.meta.outputs.version }}
       image_ref: ${{ steps.meta.outputs.image_ref }}
       digest: ${{ steps.push.outputs.digest }}
+      image_digest_ref: ${{ steps.digest_ref.outputs.image_digest_ref }}
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -469,16 +471,33 @@ jobs:
             org.opencontainers.image.title=platform
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           provenance: false
 
-      - name: Scan image with Trivy
+      - name: Set immutable digest reference
+        id: digest_ref
+        run: |
+          set -euo pipefail
+          DIGEST="${{ steps.push.outputs.digest }}"
+          IMAGE="${{ steps.meta.outputs.image }}"
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Build-push did not return an image digest"
+            exit 1
+          fi
+          REF="${IMAGE}@${DIGEST}"
+          echo "image_digest_ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "Immutable image: ${REF}"
+
+      - name: Scan image with Trivy (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: 'image'
-          image-ref: ${{ steps.meta.outputs.image_ref }}
+          image-ref: ${{ steps.digest_ref.outputs.image_digest_ref }}
           format: 'sarif'
           output: 'trivy-image-results.sarif'
           severity: 'CRITICAL,HIGH'
+          exit-code: '0'
 
       - name: Upload Trivy image scan results
         uses: github/codeql-action/upload-sarif@1b549b9259bda1cb5ddde3b41741a82a2d15a841 # v3.28.13
@@ -487,6 +506,16 @@ jobs:
         with:
           sarif_file: 'trivy-image-results.sarif'
           category: trivy-image
+
+      - name: Fail pipeline on CRITICAL or HIGH image vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'image'
+          image-ref: ${{ steps.digest_ref.outputs.image_digest_ref }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
 
 
   deploy-staging:
@@ -579,26 +608,29 @@ jobs:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
-          IMAGE: ${{ needs.docker-build-push.outputs.image_ref }}
+          IMAGE_TAG: ${{ needs.docker-build-push.outputs.image_ref }}
+          IMAGE: ${{ needs.docker-build-push.outputs.image_digest_ref }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
         run: |
           set -euo pipefail
           if [ -z "${IMAGE}" ]; then
-            echo "::error::docker-build-push did not output image_ref"
+            echo "::error::docker-build-push did not output image_digest_ref"
             exit 1
           fi
 
-          # Pull on the GitHub runner (has working DNS to ghcr.io), then stream
-          # to the VM. VMware/NAT hosts often cannot resolve or reach ghcr.io.
+          # Pull immutable digest on the runner, then stream to the VM.
           echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
           if [ -n "${GHCR_PULL_TOKEN}" ]; then
             GHCR_USER="${GHCR_USERNAME:-${GITHUB_REPOSITORY_OWNER}}"
             echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin || true
           fi
 
-          echo "Pulling ${IMAGE} on runner..."
+          echo "Pulling immutable image ${IMAGE} on runner..."
           docker pull "$IMAGE"
+          if [ -n "${IMAGE_TAG}" ]; then
+            docker tag "$IMAGE" "$IMAGE_TAG" || true
+          fi
 
           SSH=(ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
           REMOTE="${STAGING_USER}@${STAGING_HOST}"
@@ -606,7 +638,7 @@ jobs:
           echo "Streaming image to staging via SSH (docker save | docker load)..."
           docker save "$IMAGE" | gzip | "${SSH[@]}" "$REMOTE" 'gunzip | docker load'
 
-          echo "Starting container on staging (no registry pull on the VM)..."
+          echo "Starting hardened container on staging (digest deploy, SKIP_PULL=1)..."
           "${SSH[@]}" "$REMOTE" \
             "IMAGE=$(printf %q "$IMAGE") SKIP_PULL=1 bash -s" << 'EOF'
             set -euo pipefail
@@ -665,13 +697,14 @@ jobs:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
         run: |
-          echo "Deployment or tests failed. Initiating container rollback..."
+          echo "Deployment or tests failed. Initiating hardened container rollback..."
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "${STAGING_USER}@${STAGING_HOST}" << 'EOF'
             set -e
             STATE_DIR="/opt/enterprise-react-app"
             APP_NAME="enterprise-react-app"
             PORT=4173
+            CONTAINER_PORT=8080
             PREV_FILE="${STATE_DIR}/previous-image.txt"
             if [ ! -f "$PREV_FILE" ]; then
               echo "No previous-image.txt found. Cannot rollback."
@@ -695,13 +728,44 @@ jobs:
               sleep 2
               kill -9 $PIDS >/dev/null 2>&1 || true
             fi
-            docker run -d \
+            # Older images may still expose 80; try hardened 8080 first, then legacy 80.
+            if docker image inspect "$PREV_IMAGE" >/dev/null 2>&1; then
+              EXPOSED="$(docker image inspect --format='{{json .Config.ExposedPorts}}' "$PREV_IMAGE" 2>/dev/null || echo '')"
+              if echo "$EXPOSED" | grep -q '8080'; then
+                MAP_PORT=8080
+              else
+                MAP_PORT=80
+              fi
+            else
+              MAP_PORT="$CONTAINER_PORT"
+            fi
+            docker rm -f "$APP_NAME" >/dev/null 2>&1 || true
+            if ! docker run -d \
               --restart unless-stopped \
               --name "$APP_NAME" \
-              -p "${PORT}:80" \
+              --read-only \
+              --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+              --tmpfs /var/cache/nginx:rw,noexec,nosuid,size=32m \
+              --tmpfs /var/run:rw,noexec,nosuid,size=8m \
+              --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --memory 256m \
+              --cpus 0.50 \
+              --pids-limit 256 \
+              -p "${PORT}:${MAP_PORT}" \
               "$PREV_IMAGE"
+            then
+              echo "Hardened rollback failed; trying legacy docker run on port 80..."
+              docker rm -f "$APP_NAME" >/dev/null 2>&1 || true
+              docker run -d \
+                --restart unless-stopped \
+                --name "$APP_NAME" \
+                -p "${PORT}:80" \
+                "$PREV_IMAGE"
+              MAP_PORT=80
+            fi
             echo "$PREV_IMAGE" > "${STATE_DIR}/current-image.txt"
-            echo "Rollback complete."
+            echo "Rollback complete (mapped host ${PORT} -> container ${MAP_PORT})."
           EOF
 
 
