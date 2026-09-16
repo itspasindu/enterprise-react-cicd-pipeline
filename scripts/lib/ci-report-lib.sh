@@ -33,6 +33,9 @@ stage_display_name() {
     e2e-tests) echo "E2E Tests" ;;
     docker-build-push) echo "Build & Push Docker Image" ;;
     deploy-staging) echo "Deploy to Staging" ;;
+    full-stack-tests) echo "Full-Stack Tests" ;;
+    container-release) echo "Web & API Container Release" ;;
+    compose-deploy) echo "Compose Deployment" ;;
     failure-ticket) echo "Failure Ticket" ;;
     *) echo "$1" ;;
   esac
@@ -49,6 +52,9 @@ stage_job_name() {
     e2e-tests) echo "E2E Tests" ;;
     docker-build-push) echo "Build & Push Docker Image" ;;
     deploy-staging) echo "Deploy to Staging" ;;
+    full-stack-tests) echo "Test Full Stack" ;;
+    container-release) echo "Package Release" ;;
+    compose-deploy) echo "Deploy Staging" ;;
     failure-ticket) echo "Create Failure Ticket" ;;
     *) echo "" ;;
   esac
@@ -64,6 +70,9 @@ stage_issue_label() {
     e2e-tests) echo "ci/e2e" ;;
     docker-build-push) echo "ci/docker" ;;
     deploy-staging) echo "ci/deploy" ;;
+    full-stack-tests) echo "ci/tests" ;;
+    container-release) echo "ci/docker" ;;
+    compose-deploy) echo "ci/deploy" ;;
     *) echo "" ;;
   esac
 }
@@ -120,6 +129,27 @@ EOF
 cd /opt/enterprise-react-app
 IMAGE=ghcr.io/<owner>/<repo>:<sha> ./scripts/deploy.sh staging
 ./scripts/health-check.sh
+EOF
+      ;;
+    full-stack-tests)
+      cat <<'EOF'
+npm ci && npm run lint && npm run test:coverage && npm run build
+cd server && npm ci && npm run lint && npm test && npm run test:integration
+POSTGRES_PASSWORD=local-password docker compose up -d --build --wait
+E2E_BASE_URL=http://127.0.0.1:4173 E2E_USE_REAL_API=1 npm run test:e2e
+EOF
+      ;;
+    container-release)
+      cat <<'EOF'
+npm run build
+docker build -t platform-web:local .
+docker build -t platform-api:local ./server
+EOF
+      ;;
+    compose-deploy)
+      cat <<'EOF'
+docker compose --env-file /opt/platform/current.env -f /opt/platform/compose.yml ps
+curl -f http://127.0.0.1:4173/api/ready
 EOF
       ;;
     *)

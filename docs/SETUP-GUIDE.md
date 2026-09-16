@@ -1,528 +1,146 @@
-# Complete Setup Guide — Enterprise React CI/CD Pipeline
+# Full-Stack Setup Guide
 
-Step-by-step guide to go from an empty GitHub repo + Ubuntu server to a **green pipeline** that builds, tests, attests, and deploys to staging.
+## Local prerequisites
 
-**Related docs:** [CI-CD-PIPELINE.md](./CI-CD-PIPELINE.md) (how the pipeline works in detail)
+- Node.js 20+
+- npm 10+
+- Docker Engine with Compose v2
+- Git
 
----
-
-## Table of contents
-
-1. [Prerequisites](#1-prerequisites)
-2. [Clone and run locally](#2-clone-and-run-locally)
-3. [Prepare the staging Ubuntu server](#3-prepare-the-staging-ubuntu-server)
-4. [Create SSH deploy key](#4-create-ssh-deploy-key)
-5. [Network and firewall](#5-network-and-firewall)
-6. [GitHub Environments and secrets](#6-github-environments-and-secrets)
-7. [Enable Wiki reports](#7-enable-wiki-reports)
-8. [Branch protection](#8-branch-protection)
-9. [First pipeline run](#9-first-pipeline-run)
-10. [Verify staging](#10-verify-staging)
-11. [Developer day-to-day flow](#11-developer-day-to-day-flow)
-12. [Failure handling](#12-failure-handling)
-13. [Setup checklist](#13-setup-checklist)
-14. [Troubleshooting](#14-troubleshooting)
-
----
-
-## 1. Prerequisites
-
-| Item | Requirement |
-| --- | --- |
-| GitHub repository | This project pushed to GitHub (Actions enabled) |
-| Node.js (local) | ≥ 20 |
-| npm (local) | ≥ 10 |
-| Staging server | Ubuntu (VMware, Oracle VM, EC2, bare metal — any SSH host) |
-| Network | GitHub Actions must reach the server on **TCP 22** (SSH) and **TCP 4173** (health checks), **or** use a self-hosted runner on the same network |
-| Permissions | Repo admin (to create Environments, secrets, branch rules) |
-
-**You do not need AWS.** The pipeline deploys over SSH to any Ubuntu host.
-
----
-
-## 2. Clone and run locally
+## Local application
 
 ```bash
-git clone <your-repo-url>
-cd enterprise-react-cicd-pipeline   # or your folder name
-
+cp .env.example .env
+# Set a strong POSTGRES_PASSWORD
 npm ci
-npm run lint
-npm run format:check
-npm run test
 npm run build
-npm run preview   # http://localhost:4173
+docker compose up -d --build --wait
 ```
 
-Optional E2E (needs Playwright browsers):
+Open `http://localhost:4173`.
 
 ```bash
-npx playwright install --with-deps
-CI=true npm run test:e2e
+docker compose ps
+docker compose logs -f web api postgres
+curl -f http://localhost:4173/api/ready
 ```
 
-Confirm the app works before wiring CI/CD.
-
----
-
-## 3. Prepare the staging Ubuntu server
-
-Log in to the VM (console, SSH, or hypervisor console).
-
-### 3.1 Install packages
+Stop without deleting data:
 
 ```bash
-sudo apt update
-sudo apt install -y curl git rsync ca-certificates
+docker compose down
+```
 
-# Docker Engine (Ubuntu)
-sudo apt install -y docker.io
-sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER"
-# Re-login (or newgrp docker) so group membership applies
-newgrp docker
+Use `docker compose down -v` only when you intentionally want to delete PostgreSQL data.
 
+## API development
+
+Run PostgreSQL with Compose, then start the API locally:
+
+```bash
+docker compose up -d postgres
+cd server
+npm ci
+export DATABASE_URL=postgres://platform:<password>@localhost:5432/platform
+npm run migrate
+npm run dev
+```
+
+The API listens on port 3001.
+
+## Staging server
+
+Ubuntu host requirements:
+
+```bash
 docker --version
-docker info
+docker compose version
+jq --version
 ```
 
-Node.js is **not** required on the staging host for runtime (the app runs in an nginx container). Keep Node only if you still build locally on the server.
-
-### 3.2 Create app directory
-
-The pipeline stores deploy scripts and image state under **`/opt/enterprise-react-app`**.
+Create the deployment directory and grant ownership to the deploy user:
 
 ```bash
-sudo mkdir -p /opt/enterprise-react-app/scripts
-sudo chown -R "$USER:$USER" /opt/enterprise-react-app
+sudo mkdir -p /opt/platform
+sudo chown -R "$USER":"$USER" /opt/platform
+sudo usermod -aG docker "$USER"
 ```
 
-Use the same Linux user you will put in `STAGING_USER` (examples: `ubuntu`, `opc`, your login).
+Log out and back in, then confirm `docker info` works without `sudo`.
 
-**Important:** CI deploy does **not** use `sudo` (no interactive password). The deploy user must own this directory and be able to run `docker` without sudo.
+Only SSH and application port 4173 need to be reachable from the Actions runner. PostgreSQL and the API are not exposed directly.
 
-### 3.3 Cut over from PM2 (if upgrading an existing host)
+## GitHub staging environment
 
-```bash
-# Free port 4173
-pm2 delete enterprise-react-app 2>/dev/null || true
-pm2 save 2>/dev/null || true
+Repository → Settings → Environments → create `staging`.
 
-# Optional: remove old full-tree backup used by the previous rsync deploy
-# sudo rm -rf /opt/enterprise-react-app_backup
-```
-
-### 3.3 Optional firewall (UFW)
-
-```bash
-sudo ufw allow OpenSSH
-sudo ufw allow 4173/tcp
-sudo ufw enable
-sudo ufw status
-```
-
----
-
-## 4. Create SSH deploy key
-
-Run **on the staging server** (or generate locally and install the public key).
-
-```bash
-ssh-keygen -t ed25519 -C "github-actions-staging" -f ~/github_actions_staging -N ""
-
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-cat ~/github_actions_staging.pub >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-
-# Display PRIVATE key — copy entire block for GitHub
-cat ~/github_actions_staging
-```
-
-Copy everything including:
-
-```text
------BEGIN OPENSSH PRIVATE KEY-----
-...
------END OPENSSH PRIVATE KEY-----
-```
-
-Then remove the private key file from the server:
-
-```bash
-rm -f ~/github_actions_staging ~/github_actions_staging.pub
-```
-
-Keep `authorized_keys` (public key only).
-
-### Generate pinned known_hosts
-
-From a machine that can reach the server (or on the server using its public IP/DNS):
-
-```bash
-ssh-keyscan -t ed25519,rsa YOUR_STAGING_HOST
-```
-
-Verify host fingerprints out-of-band, then save the output for `STAGING_SSH_KNOWN_HOSTS`.
-
----
-
-## 5. Network and firewall
-
-### Option A — Tailscale (recommended for private VMware / Oracle VM)
-
-Easiest when the Ubuntu server has **no public IP**. GitHub Actions joins your Tailscale network, then SSH/health checks use the Tailscale IP or MagicDNS name. **No need to open ports 22/4173 to the internet.**
-
-#### On the Ubuntu staging server
-
-```bash
-# Install Tailscale
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-
-# Note the Tailscale IP (100.x.y.z) and/or MagicDNS name
-tailscale ip -4
-tailscale status
-```
-
-Approve the device in the [Tailscale admin console](https://login.tailscale.com/admin/machines) if needed.
-
-#### Create an auth key for CI
-
-1. Open [Tailscale → Settings → Keys](https://login.tailscale.com/admin/settings/keys)
-2. **Generate auth key**
-   - Reusable: Yes (or ephemeral reusable for CI)
-   - Expiration: your choice
-   - Optionally tag: `tag:ci` (if you use ACL tags)
-3. Copy the key (`tskey-auth-...`)
-
-#### GitHub secret (Environment `staging`)
+Add:
 
 | Secret | Value |
 | --- | --- |
-| `TAILSCALE_AUTHKEY` | Auth key from Tailscale |
-| `STAGING_HOST` | Tailscale IP (`100.x.y.z`) **or** MagicDNS name (e.g. `staging-vm`) |
-| `STAGING_USER` | Linux user |
-| `SSH_PRIVATE_KEY` | Deploy private key |
-| `STAGING_SSH_KNOWN_HOSTS` | From `ssh-keyscan` **over Tailscale** (see below) |
+| `SSH_PRIVATE_KEY` | private key matching deploy user's `authorized_keys` |
+| `STAGING_HOST` | public IP/DNS or Tailscale IP/MagicDNS |
+| `STAGING_USER` | Linux deploy user |
+| `STAGING_SSH_KNOWN_HOSTS` | verified `ssh-keyscan` output |
+| `POSTGRES_PASSWORD` | strong database password |
+| `TAILSCALE_AUTHKEY` | optional reusable/ephemeral auth key |
 
-Generate known_hosts **after** both your PC and the VM are on Tailscale:
-
-```bash
-# From a machine on the same tailnet
-ssh-keyscan -t ed25519,rsa 100.x.y.z
-# or
-ssh-keyscan -t ed25519,rsa staging-vm
-```
-
-Paste into `STAGING_SSH_KNOWN_HOSTS`.
-
-The deploy job runs **Connect to Tailscale** automatically when `TAILSCALE_AUTHKEY` is set, then SSH/health checks use `STAGING_HOST` on the tailnet.
-
-#### Firewall on the VM (Tailscale path)
-
-You can keep UFW strict for the public interface:
+Generate host keys from a trusted network path:
 
 ```bash
-# Optional: only allow SSH from Tailscale CGNAT range
-sudo ufw allow in on tailscale0 to any port 22
-sudo ufw allow in on tailscale0 to any port 4173
-# Do NOT open 22/4173 to the whole internet
+ssh-keyscan -t ed25519,rsa <staging-host>
 ```
 
-### Option B — Public IP / DNAT (no Tailscale)
+Verify fingerprints independently before saving them.
 
-| Port | Direction | Purpose |
-| --- | --- | --- |
-| **22** | Inbound from internet (or GitHub IP ranges) | Actions SSH + rsync |
-| **4173** | Inbound from internet (or GitHub IP ranges) | Health/smoke checks after deploy |
+## GHCR
 
-Leave `TAILSCALE_AUTHKEY` **unset**. Set `STAGING_HOST` to the public IP/DNS.
+The Docker release workflow publishes:
 
-### Option C — Self-hosted runner
+- `platform-web:YYYY.MM.N`
+- `platform-api:YYYY.MM.N`
+- immutable digest references
 
-Install a GitHub Actions runner on the same LAN as the VM and set `runs-on: self-hosted` for deploy (workflow change). Use when you cannot use Tailscale or public SSH.
+The CD runner downloads both images using `GITHUB_TOKEN` and streams them to staging. The VM itself does not need DNS or outbound connectivity to `ghcr.io`.
 
----
+## First release
 
-## 6. GitHub Environments and secrets
+1. Push a branch and open a PR to `main`.
+2. Wait for `Test Full Stack` and `Security Full Stack`.
+3. Merge to `main`.
+4. CI builds and uploads `release-bundle`.
+5. CD starts automatically after successful CI.
+6. Check the `staging` Environment deployment and `http://<host>:4173/api/ready`.
 
-In the repo: **Settings → Environments**.
+## Manual deployment
 
-### 6.1 Create environment `ci`
+Run Actions → CD → Run workflow and enter a successful CI run ID that contains `release-bundle`.
 
-Used by the **Build** job.
+## Branch protection
 
-| Secret name | Value |
+Require a pull request and the reusable workflow checks shown after the first PR run:
+
+- `Test Full Stack / Web Quality and Unit Tests`
+- `Test Full Stack / API Unit and PostgreSQL Integration Tests`
+- `Test Full Stack / Full-Stack E2E`
+- `Security Full Stack / Dependency and Secret Scans`
+- `Security Full Stack / CodeQL and Trivy`
+
+## Wiki
+
+Enable Wikis, create the first page once, and add repository secret `WIKI_TOKEN` with repository/wiki write access if automated publishing is enabled.
+
+## Troubleshooting
+
+| Symptom | Check |
 | --- | --- |
-| `VITE_API_URL` | Your API base URL, or placeholder `https://api.example.com` |
-
-**Do not** enable Required reviewers on `ci` (that would block PR builds).
-
-### 6.2 Create environment `staging`
-
-Used by **Deploy to Staging**.
-
-| Secret name | Value |
-| --- | --- |
-| `SSH_PRIVATE_KEY` | Private key from step 4 |
-| `STAGING_HOST` | Public IP/DNS **or Tailscale IP / MagicDNS** (see §5) |
-| `STAGING_USER` | Linux user that owns `/opt/enterprise-react-app` and can run Docker |
-| `STAGING_SSH_KNOWN_HOSTS` | Output of `ssh-keyscan` (over Tailscale if using Option A) |
-| `GHCR_PULL_TOKEN` | *(Optional)* PAT with `read:packages`. Deploy pulls on the GitHub runner and streams the image over SSH, so the VM does **not** need outbound access to `ghcr.io`. |
-| `GHCR_USERNAME` | *(Optional)* GHCR login user; defaults to repository owner |
-| `TAILSCALE_AUTHKEY` | *(Optional)* Tailscale auth key for private VMs |
-
-Create the PAT under GitHub → Settings → Developer settings. After the first image push, confirm the package exists under the repo **Packages** tab (you may need to link the package to the repo / set visibility).
-
-Do **not** enable Required reviewers on `staging` if you want **automatic** deploy after green CI (current design).
-
-### 6.3 Repository secret (optional but recommended)
-
-**Settings → Secrets and variables → Actions → New repository secret**
-
-| Secret name | Value |
-| --- | --- |
-| `WIKI_TOKEN` | Personal Access Token with wiki write access |
-
-#### Create `WIKI_TOKEN`
-
-1. GitHub → **Settings → Developer settings → Personal access tokens**
-2. Fine-grained: grant this repo **Contents: Read and write**  
-   or Classic: scope **`repo`**
-3. Paste into repository secret `WIKI_TOKEN`
-
-### 6.4 Clean up
-
-Remove any old copies of `SSH_PRIVATE_KEY` / `STAGING_*` / `VITE_API_URL` from **repository** secrets after they live in Environments.
-
----
-
-## 7. Enable Wiki reports
-
-1. **Settings → General → Features → Wikis** → enable  
-2. Open **Wiki** tab → create a first page (e.g. “Home”) so `*.wiki.git` exists  
-3. Ensure `WIKI_TOKEN` is set (step 6.3)
-
-After each push to `main`, stage **Publish Wiki Report** updates:
-
-- `Pipeline-Report-YYYY-MM-DD-run-<id>`
-- `Pipeline-Reports` (index)
-- `Home` (latest link)
-
----
-
-## 8. Branch protection
-
-**Settings → Branches → Add rule** for `main`:
-
-| Setting | Recommended |
-| --- | --- |
-| Require a pull request before merging | On |
-| Require approvals | 1+ |
-| Require status checks to pass | On |
-| Require branches to be up to date | On |
-| Block force pushes | On |
-| Block deletions | On |
-
-### Required status checks
-
-After **one PR** has run the pipeline, select:
-
-- `Code Quality Checks`
-- `Security Analysis`
-- `Unit Tests`
-- `Build & Bundle Analysis`
-- `E2E Tests`
-
-**Do not** require `Deploy to Staging` on PRs (deploy runs only after merge to `main`).
-
----
-
-## 9. First pipeline run
-
-### Path A — Pull request (recommended)
-
-```bash
-git checkout -b features/first-deploy
-# make a tiny change if needed
-git push -u origin HEAD
-```
-
-Open a PR into `main`. Confirm these jobs pass:
-
-1. Code Quality Checks  
-2. Security Analysis  
-3. Unit Tests  
-4. Build & Bundle Analysis  
-5. E2E Tests  
-
-Deploy / Wiki / tickets should **not** run on the PR.
-
-Merge the PR → full pipeline on `main`, including **Deploy to Staging**.
-
-### Path B — Manual
-
-**Actions → Enterprise CI/CD Pipeline → Run workflow** (branch `main`).
-
----
-
-## 10. Verify staging
-
-After deploy succeeds:
-
-```text
-http://YOUR_STAGING_HOST:4173/
-http://YOUR_STAGING_HOST:4173/about
-http://YOUR_STAGING_HOST:4173/contact
-```
-
-On the server:
-
-```bash
-pm2 status
-pm2 logs enterprise-react-app --lines 50
-ls -la /opt/enterprise-react-app/dist/
-```
-
-In GitHub Actions:
-
-- Download `build-artifact`, `app-dist-<sha>-bundle`, `playwright-report`
-- Check **Attestations** for the dist tarball
-- Open Wiki → **Pipeline Reports**
-
----
-
-## 11. Developer day-to-day flow
-
-```text
-feature branch
-    → open PR to main
-    → wait for 5 PR jobs (quality, security, unit, build, E2E)
-    → review + merge
-    → main pipeline: same gates + staging deploy + wiki (+ tickets on failure)
-```
-
-Local commands before push:
-
-```bash
-npm ci
-npm run lint
-npm run format:check
-npx tsc --noEmit
-npm run test
-npm run build
-```
-
----
-
-## 12. Failure handling
-
-On `main` failures, CI opens a GitHub Issue (`ci-failure`).
-
-| Label | Effect |
-| --- | --- |
-| `fix/auto` | Runs lint/format fix and commits to `main` (**not** `npm audit fix`) |
-| `fix/manual` | Checklist only — you fix via PR |
-
-Or: **Actions → Developer Fix Choice → Run workflow**.
-
----
-
-## 13. Setup checklist
-
-### Local
-
-- [ ] `npm ci` succeeds  
-- [ ] `npm run validate` or lint/test/build pass  
-- [ ] Preview works on `:4173`
-
-### Staging Ubuntu (VMware / any host)
-
-- [ ] Docker Engine installed; deploy user in `docker` group  
-- [ ] `docker info` works without sudo  
-- [ ] `/opt/enterprise-react-app` owned by deploy user  
-- [ ] Deploy public key in `~/.ssh/authorized_keys`  
-- [ ] Old PM2 process removed (port 4173 free) if upgrading  
-- [ ] Ports **22** and **4173** reachable from GitHub Actions **or** Tailscale configured (`TAILSCALE_AUTHKEY` + Tailscale IP as `STAGING_HOST`) **or** self-hosted runner ready
-
-### GitHub
-
-- [ ] Environment **`ci`** + `VITE_API_URL`  
-- [ ] Environment **`staging`** + `SSH_PRIVATE_KEY`, `STAGING_HOST`, `STAGING_USER`, `STAGING_SSH_KNOWN_HOSTS`, `GHCR_PULL_TOKEN` (+ optional `GHCR_USERNAME`, `TAILSCALE_AUTHKEY`)
-- [ ] Repo secret **`WIKI_TOKEN`** (optional)  
-- [ ] Wiki enabled + first page created  
-- [ ] Branch protection on `main` + required PR checks  
-- [ ] Manual SSH test: `ssh -i key USER@HOST` works  
-
-### First green run
-
-- [ ] PR pipeline green (5 jobs)  
-- [ ] Merge to `main`  
-- [ ] Docker Build Push + Deploy Staging green  
-- [ ] App loads at `http://HOST:4173`  
-- [ ] Wiki report published (if configured)
-
----
-
-## 14. Troubleshooting
-
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| Build fails: missing `VITE_API_URL` | `ci` env secret missing | Add secret to Environment `ci` |
-| Deploy: `STAGING_SSH_KNOWN_HOSTS` error | Secret empty | Paste `ssh-keyscan` output |
-| Deploy: SSH timeout / connection refused | Firewall / no public IP | Open TCP 22 or use self-hosted runner |
-| Deploy: Permission denied (publickey) | Wrong key/user | Match `STAGING_USER` and key in `authorized_keys` |
-| Health check fails after deploy | Port 4173 blocked or container down | `docker ps`; `docker logs enterprise-react-app`; open 4173 |
-| Deploy: Docker permission denied | User not in `docker` group | `sudo usermod -aG docker $USER` then re-login |
-| Deploy: GHCR DNS timeout on VM | VM cannot resolve/reach `ghcr.io` (common on VMware NAT) | Use latest workflow: image is pulled on the Actions runner and streamed over SSH — VM needs no GHCR access |
-| Deploy: port 4173 already in use | PM2 or leftover process | `pm2 delete enterprise-react-app`; `sudo fuser -k 4173/tcp` |
-| Wiki publish fails | Wiki off or bad token | Enable Wiki; recreate `WIKI_TOKEN` |
-| PR checks missing in branch protection | No PR run yet | Open one PR and wait for jobs |
-| `ci` environment waits for approval | Required reviewers on `ci` | Disable reviewers on `ci` |
-| E2E homepage assertion fails | UI text changed | Update `tests/e2e/navigation.spec.js` |
-
-### Quick SSH smoke test from your PC
-
-```bash
-ssh -i ./github_actions_staging YOUR_USER@YOUR_HOST "node -v && npm -v && pm2 -v && ls /opt/enterprise-react-app"
-```
-
-### Reproduce CI locally
-
-```bash
-npm ci
-npm run lint && npm run format:check && npx tsc --noEmit
-npm audit --audit-level=high
-npm run test:coverage
-npm run build
-CI=true npm run test:e2e
-```
-
----
-
-## What the pipeline does after setup
-
-```text
-PR → main
-  Code Quality → Security → Unit Tests → Build (SBOM + attest) → E2E
-  (no Docker push / deploy)
-
-Merge / push → main
-  Same gates → Docker image → GHCR → Deploy Staging (runner pulls image, SSH `docker load`, run :4173)
-            → Failure ticket (if fail)
-            → Wiki report
-```
-
-**App URL after deploy:** `http://STAGING_HOST:4173`
-
----
-
-## Next steps (optional)
-
-- Put **HTTPS** (or an edge proxy) in front of port 4173 if exposing publicly  
-- Add a **production** Ubuntu VM + `production` Environment + manual approval  
-- Restrict SSH to office/VPN IPs  
-- Install a **self-hosted runner** if the VM stays on a private network  
-
-For stage-by-stage behavior, see [CI-CD-PIPELINE.md](./CI-CD-PIPELINE.md).
+| API not ready | `docker compose --env-file /opt/platform/current.env -f /opt/platform/compose.yml logs api postgres` |
+| Database authentication failure | staging `POSTGRES_PASSWORD`; existing volume retains original DB credentials |
+| Password changed after first deploy | update the role inside PostgreSQL or recreate the volume only if data can be deleted |
+| Web returns 502 | API health and Compose backend network |
+| Contact form fails | `/api/contacts` response and API logs |
+| Image unavailable | CI release job and digest in `release-metadata.json` |
+| SSH host key failure | refresh and independently verify `STAGING_SSH_KNOWN_HOSTS` |
+| Deploy fails | CD automatically calls reusable rollback |
+
+Changing `POSTGRES_PASSWORD` after the persistent volume is initialized does not automatically change the database role password.

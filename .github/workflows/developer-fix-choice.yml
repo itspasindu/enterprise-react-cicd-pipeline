@@ -97,6 +97,8 @@ jobs:
         run: |
           npm run lint:fix || true
           npm run format || true
+          npx eslint server/src server/tests --ext js --fix || true
+          npx prettier --write "server/**/*.{js,json,sql}" || true
 
       - name: Commit and push auto-fixes
         id: commit
@@ -173,10 +175,11 @@ jobs:
           Thanks @${ACTOR} — auto-fix will **not** run. Please fix on the developer side:
 
           1. Checkout \`main\` (or a short-lived fix branch)
-          2. Reproduce with \`npm run lint\`, \`npm run format:check\`, \`npm audit --audit-level=high\`, etc.
-          3. Apply and verify the fix locally (dependency changes via reviewed PR — never silent \`npm audit fix\` in CI)
-          4. Push to \`main\` (or open a PR into \`main\`)
-          5. Confirm CI is green, then close the failure issue
+          2. Reproduce web checks with \`npm run lint\`, \`npm run format:check\`, and \`npm audit --audit-level=high\`
+          3. Reproduce API checks with \`cd server && npm ci && npm run lint && npm test && npm audit --audit-level=high\`
+          4. Apply and verify the fix locally (dependency changes via reviewed PR — never silent \`npm audit fix\` in CI)
+          5. Push to \`main\` (or open a PR into \`main\`)
+          6. Confirm CI and CD are green, then close the failure issue
 
           Approval run: ${RUN_URL}"
 

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Full-Stack CI/CD Pipeline</title>
+  <style>
+    :root{--navy:#14213d;--blue:#2463a9;--ink:#1f2937;--muted:#64748b;--line:#dbe3ee;--bg:#f3f6fa;--white:#fff;--green:#087f5b;--red:#b42318}
+    *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);font-family:Arial,sans-serif;color:var(--ink)}
+    .slide{position:absolute;inset:0;padding:6vh 7vw 8vh;display:flex;flex-direction:column;justify-content:center;opacity:0;visibility:hidden;transition:.3s}
+    .slide.active{opacity:1;visibility:visible}.eyebrow{text-transform:uppercase;letter-spacing:.16em;color:var(--blue);font-size:13px;font-weight:700}
+    h1{font-size:clamp(42px,6vw,76px);line-height:1.02;margin:16px 0;color:var(--navy);max-width:900px}h2{font-size:clamp(30px,4vw,50px);margin:10px 0 24px;color:var(--navy)}
+    .lead{font-size:clamp(18px,2vw,25px);line-height:1.5;color:var(--muted);max-width:950px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+    .grid.two{grid-template-columns:repeat(2,1fr)}.card{background:var(--white);border:1px solid var(--line);border-radius:14px;padding:22px;box-shadow:0 8px 24px #14213d10}
+    .card h3{margin:0 0 9px;color:var(--navy)}.card p,.card li{color:var(--muted);line-height:1.45}.flow{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+    .node{background:white;border:1px solid var(--line);border-radius:10px;padding:14px 17px;text-align:center}.node b{display:block;color:var(--navy)}.arrow{color:var(--blue);font-size:22px}
+    code,.code{font-family:Consolas,monospace}.code{background:var(--navy);color:white;padding:18px;border-radius:10px;margin:15px 0;line-height:1.7}
+    .good{color:var(--green)}.bad{color:var(--red)}ul{padding-left:21px}.footer{position:absolute;bottom:3vh;left:7vw;right:7vw;border-top:1px solid var(--line);padding-top:10px;display:flex;justify-content:space-between;color:var(--muted);font-size:12px}
+    .hud{position:fixed;right:18px;bottom:16px;z-index:20;display:flex;gap:7px}.hud button{border:1px solid var(--line);background:white;border-radius:7px;padding:7px 12px}
+    @media(max-width:850px){.grid,.grid.two{grid-template-columns:1fr}.slide{overflow:auto;justify-content:flex-start}.footer{position:static;margin-top:25px}}
+    @media print{@page{size:landscape;margin:10mm}html,body{height:auto;overflow:visible}.hud{display:none}.slide{position:relative;opacity:1;visibility:visible;min-height:100vh;page-break-after:always;padding:5vh 5vw}.footer{left:5vw;right:5vw}}
+  </style>
+</head>
+<body>
+<main>
+  <section class="slide active">
+    <div class="eyebrow">Architecture overview</div>
+    <h1>Full-Stack CI/CD Pipeline</h1>
+    <p class="lead">React + Node.js API + PostgreSQL, tested as one system and released as immutable web and API containers.</p>
+    <div class="footer"><span>Full-Stack Platform</span><span>01 / 10</span></div>
+  </section>
+
+  <section class="slide">
+    <div class="eyebrow">Application</div><h2>Runtime architecture</h2>
+    <div class="flow">
+      <div class="node"><b>Browser</b><small>port 4173</small></div><span class="arrow">→</span>
+      <div class="node"><b>Web</b><small>non-root nginx :8080</small></div><span class="arrow">→</span>
+      <div class="node"><b>API</b><small>Node.js :3001</small></div><span class="arrow">→</span>
+      <div class="node"><b>Database</b><small>PostgreSQL 17</small></div>
+    </div>
+    <div class="grid two" style="margin-top:25px">
+      <div class="card"><h3>Single public origin</h3><p>nginx serves React and proxies <code>/api/*</code>. API and PostgreSQL stay private.</p></div>
+      <div class="card"><h3>Persistent data</h3><p>PostgreSQL uses a named volume. Application rollback never deletes data.</p></div>
+    </div>
+    <div class="footer"><span>Application architecture</span><span>02 / 10</span></div>
+  </section>
+
+  <section class="slide">
+    <div class="eyebrow">GitHub Actions</div><h2>Reusable workflow layout</h2>
+    <div class="code">ci.yml                  cd.yml<br>├─ reusable-test.yml     ├─ reusable-deploy.yml<br>├─ reusable-security.yml └─ reusable-rollback.yml<br>└─ reusable-docker.yml</div>
+    <p class="lead">Reusable workflows are flat under <code>.github/workflows</code>, as required by GitHub Actions.</p>
+    <div class="footer"><span>Workflow structure</span><span>03 / 10</span></div>
+  </section>
+
+  <section class="slide">
+    <div class="eyebrow">Continuous integration</div><h2>Test the complete system</h2>
+    <div class="grid">
+      <div class="card"><h3>Web</h3><ul><li>ESLint + Prettier</li><li>TypeScript</li><li>Vitest coverage</li></ul></div>
+      <div class="card"><h3>API + database</h3><ul><li>API unit tests</li><li>PostgreSQL service</li><li>Migration + integration test</li></ul></div>
+      <div class="card"><h3>Full-stack E2E</h3><ul><li>Docker Compose</li><li>Real contact API</li><li>Five Playwright browsers</li></ul></div>
+    </div>
+    <div class="footer"><span>Reusable tests</span><span>04 / 10</span></div>
+  </section>
+
+  <section class="slide">
+    <div class="eyebrow">Security</div><h2>Gates across both applications</h2>
+    <div class="grid">
+      <div class="card"><h3>Dependencies</h3><p>Separate web and API lockfile audits; reviewed dependency upgrades only.</p></div>
+      <div class="card"><h3>Source</h3><p>TruffleHog, CodeQL, and Trivy filesystem SARIF.</p></div>
+      <div class="card"><h3>Containers</h3><p>Web and API SBOMs, provenance attestations, blocking HIGH/CRITICAL scans.</p></div>
+    </div>
+    <div class="footer"><span>Security controls</span><span>05 / 10</span></div>
+  </section>
+
+  <section class="slide">
+    <div class="eyebrow">Release</div><h2>Build once, publish by CalVer</h2>
+    <div class="code">ghcr.io/&lt;owner&gt;/platform-web:YYYY.MM.N<br>ghcr.io/&lt;owner&gt;/platform-api:YYYY.MM.N</div>
+    <div class="grid two">
+      <div class="card"><h3>Traceable</h3><p><code>:staging</code>, <code>:sha-short</code>, SBOM, git revision, and provenance.</p></div>
+      <div class="card"><h3>Immutable deployment</h3><p>CD deploys <code>image@sha256:digest</code>, never a mutable tag.</p></div>
+    </div>
+    <div class="footer"><span>Container release</span><span>06 / 10</span></div>
+  </section>
+
+  <section class="slide">
+    <div class="eyebrow">Continuous delivery</div><h2>Staging deployment</h2>
+    <div class="flow">
+      <div class="node"><b>CI artifact</b><small>release-bundle</small></div><span class="arrow">→</span>
+      <div class="node"><b>Runner</b><small>pull digests</small></div><span class="arrow">→</span>
+      <div class="node"><b>SSH</b><small>docker save/load</small></div><span class="arrow">→</span>
+      <div class="node"><b>Compose</b><small>migrate + rollout</small></div>
+    </div>
+    <p class="lead">The VM does not need GHCR access. Tailscale is optional; host keys remain pinned.</p>
+    <div class="footer"><span>Reusable deploy</span><span>07 / 10</span></div>
+  </section>
+
+  <section class="slide">
+    <div class="eyebrow">Resilience</div><h2>Health and rollback</h2>
+    <div class="grid two">
+      <div class="card"><h3 class="good">Release validation</h3><ul><li>PostgreSQL health</li><li>API readiness</li><li>web health</li><li>external smoke routes</li></ul></div>
+      <div class="card"><h3 class="bad">Failure path</h3><ul><li>restore prior web/API digests</li><li>preserve PostgreSQL volume</li><li>do not reverse migrations</li><li>create deployment issue</li></ul></div>
+    </div>
+    <div class="footer"><span>Rollback policy</span><span>08 / 10</span></div>
+  </section>
+
+  <section class="slide">
+    <div class="eyebrow">Feedback</div><h2>Issues, wiki, and artifacts</h2>
+    <div class="grid">
+      <div class="card"><h3>Failure issues</h3><p>Full-stack tests, security, container release, migration, Compose deploy, and rollback.</p></div>
+      <div class="card"><h3>Wiki reports</h3><p>Run metadata, stage results, job links, remediation, and release artifacts.</p></div>
+      <div class="card"><h3>Artifacts</h3><p><code>web-dist</code>, coverage, Playwright report, release metadata, Compose, scripts, SBOMs.</p></div>
+    </div>
+    <div class="footer"><span>Operational feedback</span><span>09 / 10</span></div>
+  </section>
+
+  <section class="slide">
+    <div class="eyebrow">Summary</div><h1>One pipeline.<br>One full stack.</h1>
+    <p class="lead">PR validation → secure immutable release → Compose staging deployment → automatic application rollback.</p>
+    <div class="footer"><span>docs/CI-CD-PIPELINE.md</span><span>10 / 10</span></div>
+  </section>
+</main>
+<div class="hud"><button id="prev">←</button><button id="next">→</button></div>
+<script>
+  const slides=[...document.querySelectorAll('.slide')];let current=0;
+  const show=n=>{current=Math.max(0,Math.min(slides.length-1,n));slides.forEach((s,i)=>s.classList.toggle('active',i===current))};
+  document.querySelector('#prev').onclick=()=>show(current-1);document.querySelector('#next').onclick=()=>show(current+1);
+  addEventListener('keydown',e=>{if(['ArrowRight','PageDown',' '].includes(e.key))show(current+1);if(['ArrowLeft','PageUp'].includes(e.key))show(current-1);if(e.key.toLowerCase()==='f')document.documentElement.requestFullscreen?.()});
+</script>
+</body>
+</html>

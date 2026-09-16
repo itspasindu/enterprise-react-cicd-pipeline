@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useState } from 'react'
-import { NAV_LINKS, TEST_IDS, ARIA } from '../config/app-contract'
+import { APP_NAME, NAV_LINKS, TEST_IDS, ARIA } from '../config/app-contract'
 
 function Navbar() {
   const location = useLocation()
@@ -14,7 +14,7 @@ function Navbar() {
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-16">
           <Link to="/" className="text-xl font-bold text-gradient">
-            EnterpriseApp
+            {APP_NAME}
           </Link>
 
           {/* Desktop Nav */}

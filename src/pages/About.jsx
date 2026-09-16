@@ -6,7 +6,7 @@ function About() {
     <>
       <Helmet>
         <title>{PAGE_TITLES.about}</title>
-        <meta name="description" content="Learn about our enterprise application architecture" />
+        <meta name="description" content="Learn about the full-stack delivery architecture" />
       </Helmet>
 
       <div className="max-w-3xl mx-auto space-y-8" data-testid={TEST_IDS.aboutPage}>
@@ -15,9 +15,9 @@ function About() {
         <div className="card">
           <h2 className="text-xl font-semibold mb-4">Architecture Overview</h2>
           <p className="text-slate-400 leading-relaxed">
-            This application follows modern React best practices with a focus on performance,
-            security, and maintainability. It uses Vite for fast development and optimized
-            production builds, with code splitting and lazy loading for optimal bundle sizes.
+            A non-root nginx container serves the React application and proxies API requests to a
+            Node.js service. The API validates input and stores contact requests in PostgreSQL.
+            Docker Compose connects the services while exposing only the web entry point.
           </p>
         </div>
 
@@ -26,23 +26,23 @@ function About() {
           <ul className="space-y-3 text-slate-400">
             <li className="flex items-start gap-3">
               <span className="text-green-400 mt-1">✓</span>
-              <span>Content Security Policy (CSP) headers configured</span>
+              <span>Non-root, read-only application containers with dropped capabilities</span>
             </li>
             <li className="flex items-start gap-3">
               <span className="text-green-400 mt-1">✓</span>
-              <span>Dependency vulnerability scanning with npm audit</span>
+              <span>Separate web and API dependency vulnerability checks</span>
             </li>
             <li className="flex items-start gap-3">
               <span className="text-green-400 mt-1">✓</span>
-              <span>Container image scanning with Trivy</span>
+              <span>Blocking HIGH and CRITICAL container scans with Trivy</span>
             </li>
             <li className="flex items-start gap-3">
               <span className="text-green-400 mt-1">✓</span>
-              <span>Static Application Security Testing (SAST)</span>
+              <span>CodeQL analysis, secret scanning, SBOMs, and build provenance</span>
             </li>
             <li className="flex items-start gap-3">
               <span className="text-green-400 mt-1">✓</span>
-              <span>Secrets detection and prevention</span>
+              <span>Immutable image digests used for deployment and rollback</span>
             </li>
           </ul>
         </div>
@@ -50,9 +50,10 @@ function About() {
         <div className="card">
           <h2 className="text-xl font-semibold mb-4">CI/CD Pipeline</h2>
           <p className="text-slate-400 leading-relaxed">
-            The pipeline includes automated linting, formatting checks, unit tests, integration
-            tests, E2E tests, security scans, build verification, and automated deployment to
-            staging and production environments with approval gates.
+            Pull requests run web and API quality checks, PostgreSQL integration tests, full-stack
+            browser tests, and security scans. Main-branch releases produce CalVer web and API
+            images. Staging deploys those exact digests through Docker Compose, waits for service
+            health, and automatically restores the previous application images when rollout fails.
           </p>
         </div>
       </div>
