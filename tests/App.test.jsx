@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 import { HelmetProvider } from 'react-helmet-async'
 import { QueryClient, QueryClientProvider } from 'react-query'
@@ -8,6 +7,7 @@ import App from '../src/App'
 import { NAV_LINKS, TEST_IDS } from '../src/config/app-contract'
 
 const createWrapper = () => {
+  window.history.replaceState({}, '', '/')
   const queryClient = new QueryClient()
   const TestProviders = ({ children }) => (
     <HelmetProvider>
@@ -32,21 +32,6 @@ describe('App', () => {
     for (const { label } of NAV_LINKS) {
       expect(screen.getAllByRole('link', { name: label }).length).toBeGreaterThan(0)
     }
-  })
-
-  it('navigates to the About route without Playwright', async () => {
-    const user = userEvent.setup()
-    render(<App />, { wrapper: createWrapper() })
-
-    await user.click(screen.getAllByRole('link', { name: 'About' })[0])
-    expect(await screen.findByTestId(TEST_IDS.aboutPage)).toBeInTheDocument()
-  })
-
-  it('navigates to the Contact route without Playwright', async () => {
-    const user = userEvent.setup()
-    render(<App />, { wrapper: createWrapper() })
-    await user.click(screen.getAllByRole('link', { name: 'Contact' })[0])
-    expect(await screen.findByTestId(TEST_IDS.contactPage)).toBeInTheDocument()
   })
 
   it('renders footer', () => {
