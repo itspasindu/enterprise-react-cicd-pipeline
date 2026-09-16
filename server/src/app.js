@@ -20,14 +20,18 @@ export function createApp({ pool }) {
     response.json({ status: 'ok', service: 'platform-api' })
   })
 
-  app.get('/api/ready', async (_request, response, next) => {
-    try {
-      await pool.query('SELECT 1')
-      response.json({ status: 'ready', database: 'connected' })
-    } catch (error) {
-      next(error)
+  app.get(
+    '/api/ready',
+    rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }),
+    async (_request, response, next) => {
+      try {
+        await pool.query('SELECT 1')
+        response.json({ status: 'ready', database: 'connected' })
+      } catch (error) {
+        next(error)
+      }
     }
-  })
+  )
 
   app.post(
     '/api/contacts',
