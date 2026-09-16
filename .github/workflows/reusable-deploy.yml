@@ -1,0 +1,95 @@
+name: Reusable Deploy
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        type: string
+        required: true
+    secrets:
+      SSH_PRIVATE_KEY:
+        required: true
+      STAGING_HOST:
+        required: true
+      STAGING_USER:
+        required: true
+      STAGING_SSH_KNOWN_HOSTS:
+        required: true
+      POSTGRES_PASSWORD:
+        required: true
+      TAILSCALE_AUTHKEY:
+        required: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: Deploy Full Stack to Staging
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+    steps:
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: release/
+      - name: Connect to Tailscale
+        if: env.TAILSCALE_AUTHKEY != ''
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          authkey: ${{ env.TAILSCALE_AUTHKEY }}
+      - uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Configure known hosts
+        env:
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KNOWN_HOSTS" | sed 's/\r$//' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Pull immutable images on runner
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          WEB_IMAGE="$(jq -er '.webImage' release/release-metadata.json)"
+          API_IMAGE="$(jq -er '.apiImage' release/release-metadata.json)"
+          docker pull "$WEB_IMAGE"
+          docker pull "$API_IMAGE"
+          printf 'WEB_IMAGE=%s\nAPI_IMAGE=%s\n' "$WEB_IMAGE" "$API_IMAGE" >> "$GITHUB_ENV"
+      - name: Transfer bundle and images
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+        run: |
+          SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          ssh $SSH_OPTS "${USER}@${HOST}" "mkdir -p /opt/platform"
+          rsync -az -e "ssh $SSH_OPTS" release/ "${USER}@${HOST}:/opt/platform/"
+          docker save "$WEB_IMAGE" "$API_IMAGE" | gzip | ssh $SSH_OPTS "${USER}@${HOST}" 'gunzip | docker load'
+      - name: Deploy Compose stack
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          PASSWORD_B64="$(printf '%s' "$POSTGRES_PASSWORD" | base64 -w 0)"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "${USER}@${HOST}" "POSTGRES_PASSWORD_B64=${PASSWORD_B64} bash -s" <<'EOF'
+          set -euo pipefail
+          command -v jq >/dev/null || { echo "jq is required on staging"; exit 1; }
+          export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
+          chmod +x /opt/platform/deploy-stack.sh /opt/platform/rollback-stack.sh /opt/platform/health-check.sh
+          DEPLOY_ROOT=/opt/platform /opt/platform/deploy-stack.sh
+          EOF
+      - name: External smoke tests
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          for path in / /about /contact /api/health /api/ready; do
+            curl --fail --show-error --silent "http://${HOST}:4173${path}" >/dev/null
+            echo "${path}: OK"
+          done

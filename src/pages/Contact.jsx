@@ -1,28 +1,41 @@
 import { Helmet } from 'react-helmet-async'
 import { useState } from 'react'
 import { CONTACT_FORM, TEST_IDS, PAGE_TITLES } from '../config/app-contract'
+import api from '../utils/api'
 
 function Contact() {
   const [formData, setFormData] = useState({ name: '', email: '', message: '' })
   const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
 
-  const handleSubmit = e => {
+  const handleSubmit = async e => {
     e.preventDefault()
-    // In production, send to API
-    setSubmitted(true)
-    setTimeout(() => setSubmitted(false), 3000)
-    setFormData({ name: '', email: '', message: '' })
+    setSubmitting(true)
+    setError('')
+    try {
+      await api.post('/contacts', formData)
+      setSubmitted(true)
+      setFormData({ name: '', email: '', message: '' })
+    } catch {
+      setError('Unable to send your message. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
     <>
       <Helmet>
         <title>{PAGE_TITLES.contact}</title>
-        <meta name="description" content="Get in touch with our team" />
+        <meta name="description" content="Submit a request through the full-stack API" />
       </Helmet>
 
       <div className="max-w-xl mx-auto" data-testid={TEST_IDS.contactPage}>
-        <h1 className="text-4xl font-bold text-gradient mb-8 text-center">Contact Us</h1>
+        <h1 className="text-4xl font-bold text-gradient mb-3 text-center">Contact the Team</h1>
+        <p className="mb-8 text-center text-slate-400">
+          This form is validated by the Node.js API and persisted in PostgreSQL.
+        </p>
 
         <div className="card">
           {submitted ? (
@@ -35,6 +48,11 @@ function Contact() {
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-6" data-testid={TEST_IDS.contactForm}>
+              {error && (
+                <p className="text-red-400" role="alert" data-testid={TEST_IDS.contactError}>
+                  {error}
+                </p>
+              )}
               <div>
                 <label htmlFor="name" className="block text-sm font-medium text-slate-300 mb-2">
                   {CONTACT_FORM.labels.name}
@@ -80,8 +98,8 @@ function Contact() {
                 />
               </div>
 
-              <button type="submit" className="btn-primary w-full">
-                {CONTACT_FORM.submit}
+              <button type="submit" className="btn-primary w-full" disabled={submitting}>
+                {submitting ? 'Sending…' : CONTACT_FORM.submit}
               </button>
             </form>
           )}

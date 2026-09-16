@@ -39,8 +39,7 @@ vite.svg
 
 # Package manager and tool caches
 .npm/
+.npm-cache-api/
 .pnpm-store/
 .eslintcache
 playwright.config.js
-docs/pipeline-presentation.html
-docs/pipeline-presentation.pdf

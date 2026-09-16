@@ -7,15 +7,21 @@ function Home() {
     <>
       <Helmet>
         <title>{PAGE_TITLES.home}</title>
-        <meta name="description" content="Welcome to our enterprise-grade React application" />
+        <meta
+          name="description"
+          content="A full-stack application delivered through a secure container pipeline"
+        />
       </Helmet>
 
       <div className="space-y-12" data-testid={TEST_IDS.homePage}>
         {/* Hero Section */}
         <section className="text-center py-16">
-          <h1 className="text-5xl md:text-7xl font-bold mb-6 text-gradient">React Version 2</h1>
+          <h1 className="text-5xl md:text-7xl font-bold mb-6 text-gradient">
+            Full-Stack Delivery Platform
+          </h1>
           <p className="text-xl text-slate-400 max-w-2xl mx-auto mb-8">
-            CI/CD pipeline with GitHub Actions
+            React, Node.js, and PostgreSQL released through secure, reusable GitHub Actions
+            workflows.
           </p>
           <div className="flex gap-4 justify-center">
             <Link to="/about" className="btn-primary">
@@ -36,33 +42,33 @@ function Home() {
         <section className="grid md:grid-cols-3 gap-6">
           {[
             {
-              title: 'CI/CD Pipeline',
-              desc: 'Automated testing, security scanning, and deployment with GitHub Actions.',
+              title: 'Full-Stack Testing',
+              desc: 'Web, API, database integration, and Playwright tests run before release.',
               icon: '⚡',
             },
             {
-              title: 'Security First',
-              desc: 'CSP headers, dependency auditing, and SAST security analysis.',
+              title: 'Security Gates',
+              desc: 'Dependency, secret, source, filesystem, and container vulnerability scans.',
               icon: '🛡️',
             },
             {
-              title: 'Performance',
-              desc: 'Code splitting, lazy loading, PWA support, and optimized builds.',
+              title: 'Immutable Releases',
+              desc: 'CalVer image tags, SBOMs, provenance, and digest-based deployment.',
               icon: '🚀',
             },
             {
-              title: 'Type Safety',
-              desc: 'Full TypeScript support with strict type checking.',
+              title: 'Node.js API',
+              desc: 'Validated contact requests, security headers, rate limits, and health routes.',
               icon: '🔒',
             },
             {
-              title: 'Testing',
-              desc: 'Unit tests with Vitest, E2E with Playwright, and visual regression.',
+              title: 'PostgreSQL',
+              desc: 'Persistent application data with forward-only, tracked SQL migrations.',
               icon: '🧪',
             },
             {
-              title: 'Monitoring',
-              desc: 'Health checks, error tracking, and performance monitoring.',
+              title: 'Safe Deployment',
+              desc: 'Docker Compose health waits and automatic web/API rollback on failure.',
               icon: '📊',
             },
           ].map(feature => (
@@ -74,20 +80,40 @@ function Home() {
           ))}
         </section>
 
-        {/* Tech Stack */}
         <section className="card">
-          <h2 className="text-2xl font-bold mb-6">Technology Stack</h2>
+          <h2 className="text-2xl font-bold mb-6">Request Path</h2>
+          <div className="grid gap-4 md:grid-cols-4 text-center">
+            {[
+              ['Browser', 'Public entry point'],
+              ['Web', 'React + nginx'],
+              ['API', 'Node.js + Express'],
+              ['Database', 'PostgreSQL'],
+            ].map(([name, detail], index) => (
+              <div key={name} className="rounded-lg border border-slate-700 bg-slate-800/50 p-4">
+                <span className="text-xs font-semibold uppercase tracking-wider text-blue-400">
+                  Step {index + 1}
+                </span>
+                <h3 className="mt-2 font-semibold">{name}</h3>
+                <p className="mt-1 text-sm text-slate-400">{detail}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="card">
+          <h2 className="text-2xl font-bold mb-6">Delivery Components</h2>
           <div className="flex flex-wrap gap-3">
             {[
-              'React 18',
+              'React',
               'Vite',
-              'Tailwind CSS',
-              'React Router',
-              'Zustand',
-              'React Query',
+              'Node.js',
+              'Express',
+              'PostgreSQL',
+              'Docker Compose',
+              'GitHub Actions',
               'Vitest',
               'Playwright',
-              'AWS EC2',
+              'Trivy',
             ].map(tech => (
               <span
                 key={tech}

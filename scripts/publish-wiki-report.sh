@@ -31,6 +31,9 @@ E2E_TESTS="${E2E_TESTS:-unknown}"
 DOCKER_BUILD_PUSH="${DOCKER_BUILD_PUSH:-unknown}"
 DEPLOY_STAGING="${DEPLOY_STAGING:-unknown}"
 FAILURE_TICKET="${FAILURE_TICKET:-skipped}"
+FULL_STACK_TESTS="${FULL_STACK_TESTS:-unknown}"
+CONTAINER_RELEASE="${CONTAINER_RELEASE:-unknown}"
+COMPOSE_DEPLOY="${COMPOSE_DEPLOY:-unknown}"
 COMMIT_MESSAGE="${COMMIT_MESSAGE:-}"
 REF_NAME="${REF_NAME:-main}"
 
@@ -42,9 +45,13 @@ fi
 GH_TOKEN="${TOKEN}"
 fetch_job_urls "$RUN_ID" "$GITHUB_REPOSITORY"
 
-OVERALL="$(compute_overall_status \
-  "$CODE_QUALITY" "$SECURITY_SCAN" "$UNIT_TESTS" "$BUILD" \
-  "$E2E_TESTS" "$DOCKER_BUILD_PUSH" "$DEPLOY_STAGING")"
+if [ "$FULL_STACK_TESTS" != "unknown" ] || [ "$CONTAINER_RELEASE" != "unknown" ] || [ "$COMPOSE_DEPLOY" != "unknown" ]; then
+  OVERALL="$(compute_overall_status "$FULL_STACK_TESTS" "$SECURITY_SCAN" "$CONTAINER_RELEASE" "$COMPOSE_DEPLOY")"
+else
+  OVERALL="$(compute_overall_status \
+    "$CODE_QUALITY" "$SECURITY_SCAN" "$UNIT_TESTS" "$BUILD" \
+    "$E2E_TESTS" "$DOCKER_BUILD_PUSH" "$DEPLOY_STAGING")"
+fi
 
 TIMESTAMP="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
 DATE_STAMP="$(date -u +"%Y-%m-%d")"
@@ -77,6 +84,33 @@ fi
 cd "$WIKI_DIR"
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+cat > Full-Stack-Architecture.md <<'WIKIEOF'
+# Full-Stack Architecture
+
+## Runtime
+
+`Browser → web (non-root nginx) → Node.js API → PostgreSQL`
+
+- Port 4173 exposes only the web service.
+- nginx serves React and proxies `/api/*`.
+- API and PostgreSQL use the private Compose backend network.
+- PostgreSQL data persists in the `postgres-data` volume.
+
+## CI
+
+| Reusable workflow | Responsibility |
+| --- | --- |
+| `reusable-test.yml` | web/API quality, PostgreSQL integration, full-stack Playwright |
+| `reusable-security.yml` | dependency, secret, CodeQL, and Trivy scans |
+| `reusable-docker.yml` | CalVer web/API images, SBOM, provenance, digest metadata |
+
+## CD
+
+`cd.yml` downloads `release-bundle`, invokes `reusable-deploy.yml`, and invokes
+`reusable-rollback.yml` if deployment fails. Deployment uses immutable image digests.
+Database migrations are forward-only and PostgreSQL data is not rolled back.
+WIKIEOF
 
 if [ ! -f Pipeline-Overview.md ]; then
   cat > Pipeline-Overview.md <<'WIKIEOF'
@@ -207,20 +241,31 @@ stage_row() {
 STAGE_TABLE=""
 STAGE_TABLE+="| # | Stage | Result | Job |"
 STAGE_TABLE+=$'\n'"| --- | --- | --- | --- |"
-STAGE_TABLE+=$'\n'"$(stage_row code-quality "$CODE_QUALITY" 1)"
-STAGE_TABLE+=$'\n'"$(stage_row security-scan "$SECURITY_SCAN" 2)"
-STAGE_TABLE+=$'\n'"| 2.5 | $(stage_display_name await-fix-decision) | $(status_icon "$AWAIT_FIX_DECISION") | $(format_job_link await-fix-decision) |"
-STAGE_TABLE+=$'\n'"$(stage_row unit-tests "$UNIT_TESTS" 3)"
-STAGE_TABLE+=$'\n'"$(stage_row build "$BUILD" 4)"
-STAGE_TABLE+=$'\n'"$(stage_row e2e-tests "$E2E_TESTS" 5)"
-STAGE_TABLE+=$'\n'"$(stage_row docker-build-push "$DOCKER_BUILD_PUSH" 6)"
-STAGE_TABLE+=$'\n'"$(stage_row deploy-staging "$DEPLOY_STAGING" 7)"
-STAGE_TABLE+=$'\n'"| 8 | Failure ticket job | $(status_icon "$FAILURE_TICKET") | $(format_job_link failure-ticket) |"
+if [ "$FULL_STACK_TESTS" != "unknown" ] || [ "$CONTAINER_RELEASE" != "unknown" ] || [ "$COMPOSE_DEPLOY" != "unknown" ]; then
+  STAGE_TABLE+=$'\n'"$(stage_row full-stack-tests "$FULL_STACK_TESTS" 1)"
+  STAGE_TABLE+=$'\n'"$(stage_row security-scan "$SECURITY_SCAN" 2)"
+  STAGE_TABLE+=$'\n'"$(stage_row container-release "$CONTAINER_RELEASE" 3)"
+  STAGE_TABLE+=$'\n'"$(stage_row compose-deploy "$COMPOSE_DEPLOY" 4)"
+else
+  STAGE_TABLE+=$'\n'"$(stage_row code-quality "$CODE_QUALITY" 1)"
+  STAGE_TABLE+=$'\n'"$(stage_row security-scan "$SECURITY_SCAN" 2)"
+  STAGE_TABLE+=$'\n'"$(stage_row unit-tests "$UNIT_TESTS" 3)"
+  STAGE_TABLE+=$'\n'"$(stage_row build "$BUILD" 4)"
+  STAGE_TABLE+=$'\n'"$(stage_row e2e-tests "$E2E_TESTS" 5)"
+  STAGE_TABLE+=$'\n'"$(stage_row docker-build-push "$DOCKER_BUILD_PUSH" 6)"
+  STAGE_TABLE+=$'\n'"$(stage_row deploy-staging "$DEPLOY_STAGING" 7)"
+fi
+STAGE_TABLE+=$'\n'"| 5 | Failure ticket job | $(status_icon "$FAILURE_TICKET") | $(format_job_link failure-ticket) |"
 
 FAILURE_ANALYSIS=""
 if [ "$OVERALL" = "failure" ]; then
   FAILURE_ANALYSIS="### Failure analysis"$'\n\n'"Failed stages with remediation guidance:"$'\n\n'
-  for key in code-quality security-scan unit-tests build e2e-tests docker-build-push deploy-staging; do
+  if [ "$FULL_STACK_TESTS" != "unknown" ] || [ "$CONTAINER_RELEASE" != "unknown" ] || [ "$COMPOSE_DEPLOY" != "unknown" ]; then
+    FAILURE_KEYS=(full-stack-tests security-scan container-release compose-deploy)
+  else
+    FAILURE_KEYS=(code-quality security-scan unit-tests build e2e-tests docker-build-push deploy-staging)
+  fi
+  for key in "${FAILURE_KEYS[@]}"; do
     result_var=""
     case "$key" in
       code-quality) result_var="$CODE_QUALITY" ;;
@@ -230,6 +275,9 @@ if [ "$OVERALL" = "failure" ]; then
       e2e-tests) result_var="$E2E_TESTS" ;;
       docker-build-push) result_var="$DOCKER_BUILD_PUSH" ;;
       deploy-staging) result_var="$DEPLOY_STAGING" ;;
+      full-stack-tests) result_var="$FULL_STACK_TESTS" ;;
+      container-release) result_var="$CONTAINER_RELEASE" ;;
+      compose-deploy) result_var="$COMPOSE_DEPLOY" ;;
     esac
     if [ "$result_var" = "failure" ]; then
       FAILURE_ANALYSIS+="$(stage_troubleshooting_md "$key")"$'\n\n'
@@ -293,10 +341,10 @@ ${FAILURE_ANALYSIS}
 
 | Artifact | Description |
 | --- | --- |
-| \`build-artifact\` | Production \`dist/\` (E2E + Docker) |
-| \`app-dist-${SHORT_SHA}-bundle\` | Tarball + SBOM + SHA256SUMS |
-| GHCR image | \`ghcr.io/${GITHUB_REPOSITORY}:${SHA}\` |
-| \`coverage-report\` | Unit test coverage |
+| \`web-dist\` | Exact React production build |
+| \`release-bundle\` | Compose, scripts, web/API SBOMs, digest metadata |
+| GHCR images | \`platform-web\` + \`platform-api\` immutable digests |
+| \`web-coverage\` | React unit test coverage |
 | \`playwright-report\` | E2E report and traces |
 
 ---
@@ -349,6 +397,7 @@ cat > Home.md <<EOF
 | Page | Description |
 | --- | --- |
 | [Pipeline Overview](Pipeline-Overview) | Stages and triggers |
+| [Full-Stack Architecture](Full-Stack-Architecture) | Web, API, PostgreSQL, CI and CD |
 | [Artifact Reference](Artifact-Reference) | Downloadable artifacts |
 | [Troubleshooting](Troubleshooting) | Common fixes |
 
@@ -363,6 +412,7 @@ _Updated ${TIMESTAMP} · Run [#${RUN_ID}](${RUN_URL})_
 EOF
 
 git add Home.md Pipeline-Reports.md "${REPORT_PAGE}.md"
+git add Full-Stack-Architecture.md
 [ -f Pipeline-Overview.md ] && git add Pipeline-Overview.md
 [ -f Artifact-Reference.md ] && git add Artifact-Reference.md
 [ -f Troubleshooting.md ] && git add Troubleshooting.md

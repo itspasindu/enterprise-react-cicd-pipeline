@@ -33,6 +33,9 @@ BUILD="${BUILD:-unknown}"
 E2E_TESTS="${E2E_TESTS:-unknown}"
 DOCKER_BUILD_PUSH="${DOCKER_BUILD_PUSH:-unknown}"
 DEPLOY_STAGING="${DEPLOY_STAGING:-unknown}"
+FULL_STACK_TESTS="${FULL_STACK_TESTS:-unknown}"
+CONTAINER_RELEASE="${CONTAINER_RELEASE:-unknown}"
+COMPOSE_DEPLOY="${COMPOSE_DEPLOY:-unknown}"
 
 export GITHUB_REPOSITORY
 
@@ -84,13 +87,20 @@ record_failure() {
   fi
 }
 
-record_failure "$CODE_QUALITY" "code-quality"
-record_failure "$SECURITY_SCAN" "security-scan"
-record_failure "$UNIT_TESTS" "unit-tests"
-record_failure "$BUILD" "build"
-record_failure "$E2E_TESTS" "e2e-tests"
-record_failure "$DOCKER_BUILD_PUSH" "docker-build-push"
-record_failure "$DEPLOY_STAGING" "deploy-staging"
+if [ "$FULL_STACK_TESTS" != "unknown" ] || [ "$CONTAINER_RELEASE" != "unknown" ] || [ "$COMPOSE_DEPLOY" != "unknown" ]; then
+  record_failure "$FULL_STACK_TESTS" "full-stack-tests"
+  record_failure "$SECURITY_SCAN" "security-scan"
+  record_failure "$CONTAINER_RELEASE" "container-release"
+  record_failure "$COMPOSE_DEPLOY" "compose-deploy"
+else
+  record_failure "$CODE_QUALITY" "code-quality"
+  record_failure "$SECURITY_SCAN" "security-scan"
+  record_failure "$UNIT_TESTS" "unit-tests"
+  record_failure "$BUILD" "build"
+  record_failure "$E2E_TESTS" "e2e-tests"
+  record_failure "$DOCKER_BUILD_PUSH" "docker-build-push"
+  record_failure "$DEPLOY_STAGING" "deploy-staging"
+fi
 
 if [ ${#FAILED_STAGE_KEYS[@]} -eq 0 ]; then
   echo "No failed stages detected; skipping ticket creation."
@@ -132,7 +142,12 @@ fetch_job_urls "$RUN_ID" "$GH_REPO"
 
 JOB_LOGS_MD="| Stage | Status | Logs |"
 JOB_LOGS_MD+=$'\n'"| --- | --- | --- |"
-for key in code-quality security-scan unit-tests build e2e-tests docker-build-push deploy-staging; do
+if [ "$FULL_STACK_TESTS" != "unknown" ] || [ "$CONTAINER_RELEASE" != "unknown" ] || [ "$COMPOSE_DEPLOY" != "unknown" ]; then
+  REPORT_KEYS=(full-stack-tests security-scan container-release compose-deploy)
+else
+  REPORT_KEYS=(code-quality security-scan unit-tests build e2e-tests docker-build-push deploy-staging)
+fi
+for key in "${REPORT_KEYS[@]}"; do
   result_var=""
   case "$key" in
     code-quality) result_var="$CODE_QUALITY" ;;
@@ -142,6 +157,9 @@ for key in code-quality security-scan unit-tests build e2e-tests docker-build-pu
     e2e-tests) result_var="$E2E_TESTS" ;;
     docker-build-push) result_var="$DOCKER_BUILD_PUSH" ;;
     deploy-staging) result_var="$DEPLOY_STAGING" ;;
+    full-stack-tests) result_var="$FULL_STACK_TESTS" ;;
+    container-release) result_var="$CONTAINER_RELEASE" ;;
+    compose-deploy) result_var="$COMPOSE_DEPLOY" ;;
   esac
   log_cell="n/a"
   if [ "$result_var" = "failure" ]; then

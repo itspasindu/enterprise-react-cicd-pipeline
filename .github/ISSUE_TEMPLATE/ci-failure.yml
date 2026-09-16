@@ -1,7 +1,7 @@
 name: CI/CD Failure Ticket
 description: Track a pipeline failure detected by the CI/CD workflow
-title: "[CI Failure]: "
-labels: ["ci-failure", "bug", "needs-triage"]
+title: '[CI Failure]: '
+labels: ['ci-failure', 'bug', 'needs-triage']
 body:
   - type: markdown
     attributes:
@@ -15,13 +15,16 @@ body:
       description: Which pipeline stage(s) failed?
       multiple: true
       options:
-        - Code Quality Checks
+        - Web Quality and Unit Tests
+        - API Unit Tests
+        - PostgreSQL Integration Tests
+        - Full-Stack E2E Tests
         - Security Analysis
-        - Unit Tests
-        - Build & Bundle Analysis
-        - E2E Tests
-        - Build & Push Docker Image
-        - Deploy to Staging
+        - Web Container Build
+        - API Container Build
+        - Database Migration
+        - Compose Deployment
+        - Rollback
         - Other
     validations:
       required: true

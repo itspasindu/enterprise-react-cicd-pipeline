@@ -4,7 +4,7 @@
  * React components and Playwright tests both import from here.
  */
 
-export const APP_NAME = 'Enterprise React App'
+export const APP_NAME = 'Full-Stack Delivery Platform'
 
 /** Document titles — keep in sync with page <Helmet> titles */
 export const PAGE_TITLES = {
@@ -37,6 +37,7 @@ export const TEST_IDS = {
   goHomeLink: 'go-home-link',
   contactForm: 'contact-form',
   contactSuccess: 'contact-success',
+  contactError: 'contact-error',
 }
 
 export const ARIA = {

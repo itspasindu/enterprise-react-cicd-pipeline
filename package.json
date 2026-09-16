@@ -17,6 +17,12 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "api:install": "npm ci --prefix server",
+    "api:test": "npm test --prefix server",
+    "api:dev": "npm run dev --prefix server",
+    "stack:up": "docker compose up -d --build --wait",
+    "stack:down": "docker compose down",
+    "stack:logs": "docker compose logs -f",
     "audit": "npm audit --audit-level=moderate",
     "audit:fix": "npm audit fix",
     "typecheck": "tsc --noEmit",
@@ -39,7 +45,7 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^5.2.0",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.11",
     "autoprefixer": "^10.4.19",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
@@ -56,7 +62,7 @@
     "typescript": "^5.5.4",
     "vite": "^8.2.0",
     "vite-plugin-pwa": "^1.3.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=20.0.0",

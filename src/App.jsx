@@ -4,6 +4,7 @@ import { Helmet } from 'react-helmet-async'
 import Navbar from '@components/Navbar'
 import LoadingSpinner from '@components/LoadingSpinner'
 import ErrorBoundary from '@components/ErrorBoundary'
+import { APP_NAME } from './config/app-contract'
 
 const Home = lazy(() => import('@pages/Home'))
 const About = lazy(() => import('@pages/About'))
@@ -14,8 +15,11 @@ function App() {
   return (
     <ErrorBoundary>
       <Helmet>
-        <title>Enterprise React App</title>
-        <meta name="description" content="Enterprise-grade React application" />
+        <title>{APP_NAME}</title>
+        <meta
+          name="description"
+          content="A full-stack React, Node.js, and PostgreSQL delivery platform"
+        />
       </Helmet>
       <div className="min-h-screen bg-slate-900 text-white">
         <Navbar />
@@ -31,7 +35,9 @@ function App() {
         </main>
         <footer className="border-t border-slate-700 py-6 mt-auto">
           <div className="container mx-auto px-4 text-center text-slate-400">
-            <p>&copy; {new Date().getFullYear()} Enterprise React App. All rights reserved.</p>
+            <p>
+              &copy; {new Date().getFullYear()} {APP_NAME}. All rights reserved.
+            </p>
           </div>
         </footer>
       </div>

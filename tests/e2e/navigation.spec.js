@@ -16,6 +16,15 @@ import {
  */
 test.describe('Application smoke @cross-browser', () => {
   test.beforeEach(async ({ page }) => {
+    if (!process.env.E2E_USE_REAL_API) {
+      await page.route('**/api/contacts', route =>
+        route.fulfill({
+          status: 201,
+          contentType: 'application/json',
+          body: JSON.stringify({ id: 1, message: 'Contact request received' }),
+        })
+      )
+    }
     await page.goto(ROUTES.home)
   })
 

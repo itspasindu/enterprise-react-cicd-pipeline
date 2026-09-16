@@ -1,0 +1,49 @@
+name: Reusable Rollback
+
+on:
+  workflow_call:
+    secrets:
+      SSH_PRIVATE_KEY:
+        required: true
+      STAGING_HOST:
+        required: true
+      STAGING_USER:
+        required: true
+      STAGING_SSH_KNOWN_HOSTS:
+        required: true
+      TAILSCALE_AUTHKEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    name: Roll Back Application Images
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+    steps:
+      - name: Connect to Tailscale
+        if: env.TAILSCALE_AUTHKEY != ''
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          authkey: ${{ env.TAILSCALE_AUTHKEY }}
+      - uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Configure known hosts
+        env:
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KNOWN_HOSTS" | sed 's/\r$//' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Restore previous application release
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+        run: |
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "${USER}@${HOST}" "DEPLOY_ROOT=/opt/platform /opt/platform/rollback-stack.sh"

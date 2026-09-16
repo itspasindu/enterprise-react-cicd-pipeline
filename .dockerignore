@@ -13,6 +13,8 @@ docs
 src
 tests
 scripts
+server
+compose.yml
 public
 *.log
 .DS_Store
