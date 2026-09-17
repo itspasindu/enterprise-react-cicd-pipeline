@@ -76,12 +76,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push web
+      - name: Build web candidate
         id: web
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
         with:
           context: .
-          push: true
+          load: true
           tags: ${{ steps.meta.outputs.web_tags }}
           cache-from: type=gha,scope=platform-web
           cache-to: type=gha,mode=max,scope=platform-web
@@ -91,12 +91,12 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           provenance: false
 
-      - name: Build and push API
+      - name: Build API candidate
         id: api
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
         with:
           context: server
-          push: true
+          load: true
           tags: ${{ steps.meta.outputs.api_tags }}
           cache-from: type=gha,scope=platform-api
           cache-to: type=gha,mode=max,scope=platform-api
@@ -106,11 +106,58 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           provenance: false
 
+      - name: Scan web image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.web_image }}:${{ steps.meta.outputs.version }}
+          scanners: vuln
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.api_image }}:${{ steps.meta.outputs.version }}
+          scanners: vuln
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Publish verified web image
+        id: web_push
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.web_tags }}
+          cache-from: type=gha,scope=platform-web
+          labels: |
+            org.opencontainers.image.title=${{ inputs.release-prefix }}-web
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: false
+
+      - name: Publish verified API image
+        id: api_push
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: server
+          push: true
+          tags: ${{ steps.meta.outputs.api_tags }}
+          cache-from: type=gha,scope=platform-api
+          labels: |
+            org.opencontainers.image.title=${{ inputs.release-prefix }}-api
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: false
+
       - name: Set immutable references
         id: refs
         run: |
-          echo "web_digest_ref=${{ steps.meta.outputs.web_image }}@${{ steps.web.outputs.digest }}" >> "$GITHUB_OUTPUT"
-          echo "api_digest_ref=${{ steps.meta.outputs.api_image }}@${{ steps.api.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "web_digest_ref=${{ steps.meta.outputs.web_image }}@${{ steps.web_push.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "api_digest_ref=${{ steps.meta.outputs.api_image }}@${{ steps.api_push.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
       - name: Generate web SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
@@ -127,36 +174,17 @@ jobs:
           output-file: api-sbom.cyclonedx.json
           upload-artifact: false
 
-      - name: Scan web image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ steps.refs.outputs.web_digest_ref }}
-          scanners: vuln
-          format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Scan API image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ steps.refs.outputs.api_digest_ref }}
-          scanners: vuln
-          format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
-
       - name: Attest web image
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-name: ${{ steps.meta.outputs.web_image }}
-          subject-digest: ${{ steps.web.outputs.digest }}
+          subject-digest: ${{ steps.web_push.outputs.digest }}
           push-to-registry: true
       - name: Attest API image
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-name: ${{ steps.meta.outputs.api_image }}
-          subject-digest: ${{ steps.api.outputs.digest }}
+          subject-digest: ${{ steps.api_push.outputs.digest }}
           push-to-registry: true
 
       - name: Create release bundle
