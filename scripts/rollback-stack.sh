@@ -13,9 +13,20 @@ if ! docker compose version >/dev/null 2>&1; then
   cat <<'MSG' >&2
 Docker Compose v2 is required (`docker compose`), not the legacy `docker-compose` binary.
 
-Install on Ubuntu/Debian:
-  sudo apt-get update
-  sudo apt-get install -y docker-compose-plugin
+Ubuntu's default docker.io package does not ship docker-compose-plugin.
+Install the Compose v2 CLI plugin:
+
+  ARCH="$(uname -m)"
+  case "$ARCH" in
+    x86_64) ARCH=x86_64 ;;
+    aarch64|arm64) ARCH=aarch64 ;;
+    armv7l) ARCH=armv7 ;;
+    *) echo "Unsupported arch: $ARCH"; exit 1 ;;
+  esac
+  sudo mkdir -p /usr/local/lib/docker/cli-plugins
+  sudo curl -fsSL "https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-${ARCH}" \
+    -o /usr/local/lib/docker/cli-plugins/docker-compose
+  sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
   docker compose version
 
 Then re-run CD.

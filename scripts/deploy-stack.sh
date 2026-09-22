@@ -13,14 +13,10 @@ POSTGRES_USER="${POSTGRES_USER:-platform}"
 command -v docker >/dev/null || { echo "Docker is required"; exit 1; }
 if ! docker compose version >/dev/null 2>&1; then
   cat <<'MSG' >&2
-Docker Compose v2 is required (`docker compose`), not the legacy `docker-compose` binary.
+Docker Compose v2 is required (`docker compose`).
 
-Install on Ubuntu/Debian:
-  sudo apt-get update
-  sudo apt-get install -y docker-compose-plugin
-  docker compose version
-
-Then re-run CD.
+If this host has no outbound DNS/GitHub access, re-run CD — the deploy workflow
+bootstraps Compose into ~/.docker/cli-plugins/ over SSH from the Actions runner.
 MSG
   exit 1
 fi
