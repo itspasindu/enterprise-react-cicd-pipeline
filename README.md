@@ -143,7 +143,7 @@ Each image also has `:staging` and `:sha-<short>` tags. Deployment uses immutabl
 | `POSTGRES_PASSWORD` | Yes |
 | `TAILSCALE_AUTHKEY` | Optional |
 
-The staging user must own `/opt/platform`, run Docker without `sudo`, and have Docker Compose v2 plus `jq`.
+The staging user should own `/opt/platform` (CD falls back to `~/platform` if needed), run Docker without `sudo`, and have Docker Compose v2 plus `jq`.
 
 ## Documentation
 

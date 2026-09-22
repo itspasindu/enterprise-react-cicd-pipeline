@@ -61,14 +61,38 @@ jobs:
           docker pull "$WEB_IMAGE"
           docker pull "$API_IMAGE"
           printf 'WEB_IMAGE=%s\nAPI_IMAGE=%s\n' "$WEB_IMAGE" "$API_IMAGE" >> "$GITHUB_ENV"
+      - name: Resolve staging deploy root
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+        run: |
+          SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          DEPLOY_ROOT="$(
+            ssh $SSH_OPTS "${USER}@${HOST}" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          if [ -d /opt/platform ] && [ -w /opt/platform ]; then
+            printf '%s\n' /opt/platform
+          elif mkdir -p /opt/platform 2>/dev/null && [ -w /opt/platform ]; then
+            printf '%s\n' /opt/platform
+          else
+            mkdir -p "$HOME/platform"
+            printf '%s\n' "$HOME/platform"
+          fi
+          REMOTE
+          )"
+          echo "Using DEPLOY_ROOT=${DEPLOY_ROOT}"
+          if [ "$DEPLOY_ROOT" != /opt/platform ]; then
+            echo "::notice::/opt/platform is not writable for ${USER}; deploying to ${DEPLOY_ROOT}. For the preferred path, run on the VM: sudo mkdir -p /opt/platform && sudo chown -R ${USER}:${USER} /opt/platform"
+          fi
+          echo "DEPLOY_ROOT=${DEPLOY_ROOT}" >> "$GITHUB_ENV"
       - name: Transfer bundle and images
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
         run: |
           SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
-          ssh $SSH_OPTS "${USER}@${HOST}" "mkdir -p /opt/platform"
-          rsync -az -e "ssh $SSH_OPTS" release/ "${USER}@${HOST}:/opt/platform/"
+          ssh $SSH_OPTS "${USER}@${HOST}" "mkdir -p '${DEPLOY_ROOT}'"
+          rsync -az -e "ssh $SSH_OPTS" release/ "${USER}@${HOST}:${DEPLOY_ROOT}/"
           docker save "$WEB_IMAGE" "$API_IMAGE" | gzip | ssh $SSH_OPTS "${USER}@${HOST}" 'gunzip | docker load'
       - name: Deploy Compose stack
         env:
@@ -78,12 +102,12 @@ jobs:
         run: |
           PASSWORD_B64="$(printf '%s' "$POSTGRES_PASSWORD" | base64 -w 0)"
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            "${USER}@${HOST}" "POSTGRES_PASSWORD_B64=${PASSWORD_B64} bash -s" <<'EOF'
+            "${USER}@${HOST}" "DEPLOY_ROOT=${DEPLOY_ROOT} POSTGRES_PASSWORD_B64=${PASSWORD_B64} bash -s" <<'EOF'
           set -euo pipefail
           command -v jq >/dev/null || { echo "jq is required on staging"; exit 1; }
           export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
-          chmod +x /opt/platform/deploy-stack.sh /opt/platform/rollback-stack.sh /opt/platform/health-check.sh
-          DEPLOY_ROOT=/opt/platform /opt/platform/deploy-stack.sh
+          chmod +x "$DEPLOY_ROOT/deploy-stack.sh" "$DEPLOY_ROOT/rollback-stack.sh" "$DEPLOY_ROOT/health-check.sh"
+          "$DEPLOY_ROOT/deploy-stack.sh"
           EOF
       - name: External smoke tests
         env:

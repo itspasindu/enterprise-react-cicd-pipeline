@@ -46,4 +46,15 @@ jobs:
           USER: ${{ secrets.STAGING_USER }}
         run: |
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            "${USER}@${HOST}" "DEPLOY_ROOT=/opt/platform /opt/platform/rollback-stack.sh"
+            "${USER}@${HOST}" 'bash -s' <<'EOF'
+          set -euo pipefail
+          for root in /opt/platform "$HOME/platform"; do
+            if [ -x "$root/rollback-stack.sh" ]; then
+              echo "Rolling back from DEPLOY_ROOT=$root"
+              DEPLOY_ROOT="$root" "$root/rollback-stack.sh"
+              exit 0
+            fi
+          done
+          echo "No prior deploy found to roll back (missing rollback-stack.sh under /opt/platform or ~/platform)."
+          exit 0
+          EOF
