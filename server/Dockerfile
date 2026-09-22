@@ -1,14 +1,9 @@
-FROM node:22-alpine AS dependencies
+FROM node:24-alpine AS dependencies
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Final image starts from Alpine so npm/yarn/corepack never ship.
-FROM alpine:3.24 AS runtime
-RUN apk upgrade --no-cache \
-  && apk add --no-cache libstdc++ ca-certificates wget \
-  && addgroup -g 1000 node \
-  && adduser -u 1000 -G node -s /bin/sh -D node
+FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=dependencies /usr/local/bin/node /usr/local/bin/node
