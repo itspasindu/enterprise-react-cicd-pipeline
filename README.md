@@ -78,8 +78,44 @@ docker compose down
 | `GET /api/health` | Process liveness |
 | `GET /api/ready` | API + PostgreSQL readiness |
 | `POST /api/contacts` | Validate and save a contact request |
+| `GET /api/pipelines/overview` | Latest CI/CD status, stages, open failures, staging summary |
+| `GET /api/pipelines/runs` | Paginated CI/CD workflow runs (`?workflow=ci\|cd`) |
+| `GET /api/pipelines/runs/:runId` | Run detail with mapped stages, jobs, artifacts |
+| `GET /api/pipelines/runs/:runId/artifacts` | Artifacts for a run |
+| `GET /api/pipelines/failures` | Open GitHub issues labeled `ci-failure` |
+| `GET /api/pipelines/staging` | Live smoke probes against `STAGING_URL` |
 
-The React contact form posts through nginx to `/api/contacts`.
+The React contact form posts through nginx to `/api/contacts`. The Pipeline Monitor UI at `/pipeline` reads only `/api/pipelines/*`.
+
+## Pipeline monitor
+
+The monitor proxies live GitHub Actions data through the API so tokens stay server-side.
+
+Set these on the API process (or in Compose via `.env`):
+
+| Variable | Purpose |
+| --- | --- |
+| `GITHUB_TOKEN` | PAT with `actions:read`, `issues:read` (and `contents:read` if you need artifact metadata) |
+| `GITHUB_OWNER` | Repository owner |
+| `GITHUB_REPO` | Repository name |
+| `STAGING_URL` | Base URL for smoke checks (Compose default: `http://web:8080`) |
+
+Without `GITHUB_TOKEN` / owner / repo, pipeline endpoints (except `/status` and staging probes) return `503` with a setup hint, and the UI shows a configuration banner.
+
+### Local live monitoring
+
+```bash
+cp .env.example .env
+# Set GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO
+
+# Terminal 1 — API (loads repo-root .env)
+npm run api:dev
+
+# Terminal 2 — Vite (proxies /api → :3001)
+npm run dev
+```
+
+Open `http://localhost:3000/pipeline`. The overview auto-refreshes (faster while a run is in progress) and shows a live stage flow visualization.
 
 ## CI/CD
 

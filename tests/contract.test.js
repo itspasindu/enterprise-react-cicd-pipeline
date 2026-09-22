@@ -11,7 +11,7 @@ describe('app-contract', () => {
 
   it('includes standard routes in navigation', () => {
     expect(NAV_LINKS.map(link => link.path)).toEqual(
-      expect.arrayContaining([ROUTES.home, ROUTES.about, ROUTES.contact])
+      expect.arrayContaining([ROUTES.home, ROUTES.about, ROUTES.contact, ROUTES.pipeline])
     )
   })
 
@@ -24,7 +24,14 @@ describe('app-contract', () => {
     expect(PAGE_TITLES.home).toContain(APP_NAME)
     expect(PAGE_TITLES.about).toContain(APP_NAME)
     expect(PAGE_TITLES.contact).toContain(APP_NAME)
+    expect(PAGE_TITLES.pipeline).toContain(APP_NAME)
     expect(PAGE_TITLES.notFound).toBeTruthy()
+  })
+
+  it('uses plain-language nav labels', () => {
+    expect(NAV_LINKS.map(link => link.label)).toEqual(
+      expect.arrayContaining(['Home', 'About', 'Status', 'Contact'])
+    )
   })
 
   it('defines contact form labels used by getByLabel in E2E', () => {

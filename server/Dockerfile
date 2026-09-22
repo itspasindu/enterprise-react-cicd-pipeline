@@ -6,7 +6,7 @@ RUN npm ci --omit=dev
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-RUN apk upgrade --no-cache
+COPY --from=dependencies /usr/local/bin/node /usr/local/bin/node
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
