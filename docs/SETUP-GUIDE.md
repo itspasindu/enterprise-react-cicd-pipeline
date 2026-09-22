@@ -53,10 +53,15 @@ The API listens on port 3001.
 Ubuntu host requirements:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y docker.io jq
+sudo usermod -aG docker "$USER"
+# log out/in, then:
 docker --version
-docker compose version
 jq --version
 ```
+
+Docker Compose v2 (`docker compose`) is required. If the VM has outbound internet you can install the CLI plugin yourself; **if it cannot reach GitHub/DNS** (common on Tailscale-only VMs), CD downloads Compose on the Actions runner and copies it to `~/.docker/cli-plugins/docker-compose` over SSH — no outbound access needed on the VM.
 
 Create the deployment directory and grant ownership to the deploy user (recommended):
 

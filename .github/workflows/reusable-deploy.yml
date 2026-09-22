@@ -85,6 +85,40 @@ jobs:
             echo "::notice::/opt/platform is not writable for ${USER}; deploying to ${DEPLOY_ROOT}. For the preferred path, run on the VM: sudo mkdir -p /opt/platform && sudo chown -R ${USER}:${USER} /opt/platform"
           fi
           echo "DEPLOY_ROOT=${DEPLOY_ROOT}" >> "$GITHUB_ENV"
+      - name: Ensure staging Docker Compose v2
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+          COMPOSE_VERSION: v2.32.4
+        run: |
+          set -euo pipefail
+          SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          ssh $SSH_OPTS "${USER}@${HOST}" 'bash -s' <<'EOF'
+          set -euo pipefail
+          command -v docker >/dev/null || { echo "Docker is required on staging"; exit 1; }
+          command -v jq >/dev/null || { echo "jq is required on staging (sudo apt-get install -y jq)"; exit 1; }
+          docker info >/dev/null
+          EOF
+
+          if ssh $SSH_OPTS "${USER}@${HOST}" 'docker compose version >/dev/null 2>&1'; then
+            ssh $SSH_OPTS "${USER}@${HOST}" 'docker compose version'
+            exit 0
+          fi
+
+          echo "Compose v2 missing on staging; bootstrapping via runner download + SCP (VM needs no outbound DNS)."
+          REMOTE_UNAME="$(ssh $SSH_OPTS "${USER}@${HOST}" 'uname -m')"
+          case "$REMOTE_UNAME" in
+            x86_64) ARCH=x86_64 ;;
+            aarch64|arm64) ARCH=aarch64 ;;
+            armv7l) ARCH=armv7 ;;
+            *) echo "Unsupported staging arch: $REMOTE_UNAME"; exit 1 ;;
+          esac
+
+          curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${ARCH}"             -o /tmp/docker-compose
+          chmod +x /tmp/docker-compose
+          ssh $SSH_OPTS "${USER}@${HOST}" 'mkdir -p "$HOME/.docker/cli-plugins"'
+          scp $SSH_OPTS /tmp/docker-compose "${USER}@${HOST}:.docker/cli-plugins/docker-compose"
+          ssh $SSH_OPTS "${USER}@${HOST}" 'chmod +x "$HOME/.docker/cli-plugins/docker-compose" && docker compose version'
       - name: Transfer bundle and images
         env:
           HOST: ${{ secrets.STAGING_HOST }}

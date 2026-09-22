@@ -11,7 +11,15 @@ POSTGRES_USER="${POSTGRES_USER:-platform}"
 : "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
 
 command -v docker >/dev/null || { echo "Docker is required"; exit 1; }
-docker compose version >/dev/null || { echo "Docker Compose v2 is required"; exit 1; }
+if ! docker compose version >/dev/null 2>&1; then
+  cat <<'MSG' >&2
+Docker Compose v2 is required (`docker compose`).
+
+If this host has no outbound DNS/GitHub access, re-run CD — the deploy workflow
+bootstraps Compose into ~/.docker/cli-plugins/ over SSH from the Actions runner.
+MSG
+  exit 1
+fi
 command -v jq >/dev/null || { echo "jq is required"; exit 1; }
 [ -f "$COMPOSE_FILE" ] || { echo "Missing $COMPOSE_FILE"; exit 1; }
 [ -f "$METADATA_FILE" ] || { echo "Missing $METADATA_FILE"; exit 1; }
