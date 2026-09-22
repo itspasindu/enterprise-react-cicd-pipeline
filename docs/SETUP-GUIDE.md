@@ -58,13 +58,15 @@ docker compose version
 jq --version
 ```
 
-Create the deployment directory and grant ownership to the deploy user:
+Create the deployment directory and grant ownership to the deploy user (recommended):
 
 ```bash
 sudo mkdir -p /opt/platform
 sudo chown -R "$USER":"$USER" /opt/platform
 sudo usermod -aG docker "$USER"
 ```
+
+If `/opt/platform` is not writable, CD automatically deploys to `~/platform` instead.
 
 Log out and back in, then confirm `docker info` works without `sudo`.
 
