@@ -101,7 +101,7 @@ Deployment steps:
 3. Optionally connect the runner with Tailscale.
 4. Verify the pinned SSH host key.
 5. Pull both immutable image digests on the runner.
-6. Stream images over SSH with `docker save | gzip` and `docker load`.
+6. Stream images over SSH with `docker save | gzip` and `docker load`, then retag as `platform-web:<CalVer>` / `platform-api:<CalVer>` (digest refs do not survive load).
 7. Copy Compose, scripts, SBOMs, and metadata to `/opt/platform`.
 8. Start PostgreSQL and wait for health.
 9. Apply forward-only migrations.

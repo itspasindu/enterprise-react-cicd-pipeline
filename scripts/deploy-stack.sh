@@ -24,12 +24,41 @@ command -v jq >/dev/null || { echo "jq is required"; exit 1; }
 [ -f "$COMPOSE_FILE" ] || { echo "Missing $COMPOSE_FILE"; exit 1; }
 [ -f "$METADATA_FILE" ] || { echo "Missing $METADATA_FILE"; exit 1; }
 
-WEB_IMAGE="$(jq -er '.webImage' "$METADATA_FILE")"
-API_IMAGE="$(jq -er '.apiImage' "$METADATA_FILE")"
 VERSION="$(jq -er '.version' "$METADATA_FILE")"
+WEB_REF="$(jq -er '.webImage' "$METADATA_FILE")"
+API_REF="$(jq -er '.apiImage' "$METADATA_FILE")"
+WEB_ID="$(jq -r '.webImageId // empty' "$METADATA_FILE")"
+API_ID="$(jq -r '.apiImageId // empty' "$METADATA_FILE")"
 
-docker image inspect "$WEB_IMAGE" >/dev/null
-docker image inspect "$API_IMAGE" >/dev/null
+# Never pass registry digest refs to Compose — they do not survive docker save/load.
+WEB_IMAGE="platform-web:${VERSION}"
+API_IMAGE="platform-api:${VERSION}"
+
+ensure_local_tag() {
+  local local_tag="$1"
+  local image_id="$2"
+  local source_ref="$3"
+
+  if docker image inspect "$local_tag" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -n "$image_id" ] && docker image inspect "$image_id" >/dev/null 2>&1; then
+    docker tag "$image_id" "$local_tag"
+    return 0
+  fi
+  if docker image inspect "$source_ref" >/dev/null 2>&1; then
+    docker tag "$source_ref" "$local_tag"
+    return 0
+  fi
+
+  echo "Missing local image for $local_tag" >&2
+  echo "  tried id=${image_id:-<none>} ref=${source_ref}" >&2
+  docker images
+  exit 1
+}
+
+ensure_local_tag "$WEB_IMAGE" "$WEB_ID" "$WEB_REF"
+ensure_local_tag "$API_IMAGE" "$API_ID" "$API_REF"
 
 mkdir -p "$DEPLOY_ROOT"
 if [ -f "$CURRENT_ENV" ]; then
@@ -54,10 +83,10 @@ echo "Starting PostgreSQL..."
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d postgres --wait
 
 echo "Applying forward-only database migrations..."
-docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm api node src/migrate.js
+docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm --no-build api node src/migrate.js
 
-echo "Deploying API and web images by digest..."
-docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans
+echo "Deploying API and web images (${WEB_IMAGE}, ${API_IMAGE})..."
+docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build
 
 echo "Running full-stack health checks..."
 curl --fail --silent --show-error http://127.0.0.1:4173/api/ready >/dev/null
