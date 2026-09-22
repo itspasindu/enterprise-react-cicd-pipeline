@@ -1,10 +1,19 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import LiveStatusBar from './LiveStatusBar'
-import { usePipelineStatus } from '@hooks/usePipelines'
+import SetupBanner from './SetupBanner'
+import { getPipelineErrorMeta, usePipelineStatus } from '@hooks/usePipelines'
 import { PIPELINE_NAV, TEST_IDS } from '../../config/app-contract'
 
 function PipelineLayout() {
-  const { data: status, isFetching, dataUpdatedAt, refetch } = usePipelineStatus()
+  const {
+    data: status,
+    error: statusError,
+    isFetching,
+    dataUpdatedAt,
+    refetch,
+  } = usePipelineStatus()
+  const statusSetupError = getPipelineErrorMeta(statusError)
+  const needsSetup = status?.configured === false || statusSetupError?.type === 'setup'
 
   return (
     <div className="space-y-6">
@@ -24,6 +33,13 @@ function PipelineLayout() {
         owner={status?.owner}
         repo={status?.repo}
       />
+
+      {needsSetup ? (
+        <SetupBanner
+          message={statusSetupError?.message || 'Live status is not connected yet'}
+          hint={status?.hint || statusSetupError?.hint}
+        />
+      ) : null}
 
       <nav
         className="flex flex-wrap gap-2 border-b border-slate-200 pb-3"

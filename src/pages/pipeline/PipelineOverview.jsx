@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
-import SetupBanner from '@components/pipeline/SetupBanner'
 import StageBoard from '@components/pipeline/StageBoard'
 import PipelineFlow from '@components/pipeline/PipelineFlow'
 import RunSummaryCard from '@components/pipeline/RunSummaryCard'
@@ -21,7 +20,9 @@ function PipelineOverview() {
 
       <div className="space-y-6" data-testid={TEST_IDS.pipelinePage}>
         {errorMeta?.type === 'setup' ? (
-          <SetupBanner message={errorMeta.message} hint={errorMeta.hint} />
+          <p className="text-sm text-slate-600">
+            Connect the API to GitHub to load live build and release results here.
+          </p>
         ) : null}
 
         {errorMeta?.type === 'error' ? (

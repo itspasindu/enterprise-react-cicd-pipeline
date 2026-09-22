@@ -12,7 +12,8 @@ export async function clickNavLink(page, label) {
   }
 
   const nav = page.getByTestId(TEST_IDS.mainNav)
-  await nav.getByRole('link', { name: label }).filter({ visible: true }).click()
+  // exact: true — APP_NAME "Delivery Status" must not match the "Status" nav link
+  await nav.getByRole('link', { name: label, exact: true }).filter({ visible: true }).click()
 }
 
 export async function expectPageMarker(page, testId) {

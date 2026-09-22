@@ -24,6 +24,17 @@ test.describe('Application smoke @cross-browser', () => {
           body: JSON.stringify({ id: 1, message: 'Contact request received' }),
         })
       )
+      await page.route('**/api/pipelines/**', route =>
+        route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'Pipeline monitor is not configured',
+            hint: 'Set GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO on the API to enable live pipeline data.',
+          }),
+        })
+      )
+      // Registered last so it wins over the catch-all (Playwright: last route first)
       await page.route('**/api/pipelines/status', route =>
         route.fulfill({
           status: 200,
@@ -34,16 +45,6 @@ test.describe('Application smoke @cross-browser', () => {
             owner: null,
             repo: null,
             stagingUrl: 'http://localhost:4173',
-            hint: 'Set GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO on the API to enable live pipeline data.',
-          }),
-        })
-      )
-      await page.route('**/api/pipelines/**', route =>
-        route.fulfill({
-          status: 503,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            error: 'Pipeline monitor is not configured',
             hint: 'Set GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO on the API to enable live pipeline data.',
           }),
         })

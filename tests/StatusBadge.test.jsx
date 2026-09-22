@@ -21,13 +21,29 @@ describe('pipeline UI primitives', () => {
     render(
       <PipelineFlow
         stages={[
-          { key: 'full-stack-tests', name: 'Full-Stack Tests', conclusion: 'success', jobs: [] },
+          {
+            key: 'full-stack-tests',
+            name: 'Full-Stack Tests',
+            conclusion: 'success',
+            jobs: [
+              {
+                id: 1,
+                name: 'Test Full Stack',
+                conclusion: 'success',
+                startedAt: '2026-01-01T00:00:00Z',
+                completedAt: '2026-01-01T00:05:00Z',
+              },
+            ],
+          },
           { key: 'security-scan', name: 'Security Analysis', conclusion: 'in_progress', jobs: [] },
         ]}
       />
     )
     expect(screen.getByTestId('pipeline-flow')).toBeInTheDocument()
-    expect(screen.getByText('Full-Stack Tests')).toBeInTheDocument()
-    expect(screen.getByText('Security Analysis')).toBeInTheDocument()
+    expect(screen.getByTestId('pipeline-progress-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('pipeline-timeline')).toBeInTheDocument()
+    expect(screen.getByTestId('pipeline-duration-chart')).toBeInTheDocument()
+    expect(screen.getAllByText('Full-Stack Tests').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Security Analysis').length).toBeGreaterThan(0)
   })
 })
