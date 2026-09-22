@@ -27,8 +27,8 @@ export default defineConfig(({ mode }) => ({
       manifest: {
         name: 'Enterprise React App',
         short_name: 'ERA',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
+        theme_color: '#f8fafc',
+        background_color: '#f8fafc',
         display: 'standalone',
         start_url: '/',
         icons: [
@@ -88,6 +88,12 @@ export default defineConfig(({ mode }) => ({
     port: 3000,
     strictPort: true,
     host: true,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port: 4173,

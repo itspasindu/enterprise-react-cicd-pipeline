@@ -24,6 +24,30 @@ test.describe('Application smoke @cross-browser', () => {
           body: JSON.stringify({ id: 1, message: 'Contact request received' }),
         })
       )
+      await page.route('**/api/pipelines/status', route =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            configured: false,
+            live: false,
+            owner: null,
+            repo: null,
+            stagingUrl: 'http://localhost:4173',
+            hint: 'Set GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO on the API to enable live pipeline data.',
+          }),
+        })
+      )
+      await page.route('**/api/pipelines/**', route =>
+        route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'Pipeline monitor is not configured',
+            hint: 'Set GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO on the API to enable live pipeline data.',
+          }),
+        })
+      )
     }
     await page.goto(ROUTES.home)
   })
@@ -42,6 +66,11 @@ test.describe('Application smoke @cross-browser', () => {
       }
       if (path === ROUTES.contact) {
         await expectPageMarker(page, TEST_IDS.contactPage)
+      }
+      if (path === ROUTES.pipeline) {
+        await expectPageMarker(page, TEST_IDS.pipelinePage)
+        await expect(page.getByTestId(TEST_IDS.pipelineSubnav)).toBeVisible()
+        await expect(page.getByTestId(TEST_IDS.pipelineSetupBanner)).toBeVisible()
       }
     })
   }

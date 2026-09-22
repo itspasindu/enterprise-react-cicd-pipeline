@@ -3,7 +3,18 @@ import request from 'supertest'
 import { createApp } from '../../src/app.js'
 
 function appWith(query = vi.fn().mockResolvedValue({ rows: [{ id: 1, created_at: new Date() }] })) {
-  return { app: createApp({ pool: { query } }), query }
+  return {
+    app: createApp({
+      pool: { query },
+      config: {
+        stagingUrl: 'http://localhost:4173',
+        githubToken: '',
+        githubOwner: '',
+        githubRepo: '',
+      },
+    }),
+    query,
+  }
 }
 
 describe('API', () => {

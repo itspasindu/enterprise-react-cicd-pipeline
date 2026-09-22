@@ -100,11 +100,27 @@ jobs:
           tags: ${{ steps.meta.outputs.api_tags }}
           cache-from: type=gha,scope=platform-api
           cache-to: type=gha,mode=max,scope=platform-api
+          no-cache-filter: runtime
           labels: |
             org.opencontainers.image.title=${{ inputs.release-prefix }}-api
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
           provenance: false
+
+      - name: Assert API image has no package managers
+        env:
+          API_IMAGE: ${{ steps.meta.outputs.api_image }}:${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh "$API_IMAGE" -ec '
+            command -v node >/dev/null
+            test ! -e /usr/local/lib/node_modules/npm
+            test ! -e /usr/local/lib/node_modules/corepack
+            test ! -e /opt/yarn-v1.22.22
+            if command -v npm >/dev/null 2>&1; then echo "npm must not exist" >&2; exit 1; fi
+            if command -v yarn >/dev/null 2>&1; then echo "yarn must not exist" >&2; exit 1; fi
+            if command -v corepack >/dev/null 2>&1; then echo "corepack must not exist" >&2; exit 1; fi
+          '
 
       - name: Scan web image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

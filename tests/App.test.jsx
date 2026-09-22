@@ -36,6 +36,6 @@ describe('App', () => {
 
   it('renders footer', () => {
     render(<App />, { wrapper: createWrapper() })
-    expect(screen.getByText(/All rights reserved/)).toBeInTheDocument()
+    expect(screen.getByText(/easy to understand/i)).toBeInTheDocument()
   })
 })
