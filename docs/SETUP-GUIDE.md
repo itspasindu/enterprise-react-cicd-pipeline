@@ -53,8 +53,13 @@ The API listens on port 3001.
 Ubuntu host requirements:
 
 ```bash
+# Docker Engine + Compose v2 plugin + jq
+sudo apt-get update
+sudo apt-get install -y docker.io docker-compose-plugin jq
+# Or with Docker's official apt repo: docker-ce + docker-compose-plugin
+
 docker --version
-docker compose version
+docker compose version   # must work — legacy `docker-compose` alone is not enough
 jq --version
 ```
 

@@ -85,6 +85,29 @@ jobs:
             echo "::notice::/opt/platform is not writable for ${USER}; deploying to ${DEPLOY_ROOT}. For the preferred path, run on the VM: sudo mkdir -p /opt/platform && sudo chown -R ${USER}:${USER} /opt/platform"
           fi
           echo "DEPLOY_ROOT=${DEPLOY_ROOT}" >> "$GITHUB_ENV"
+      - name: Preflight staging Docker Compose v2
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+        run: |
+          SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          ssh $SSH_OPTS "${USER}@${HOST}" 'bash -s' <<'EOF'
+          set -euo pipefail
+          command -v docker >/dev/null || { echo "Docker is required on staging"; exit 1; }
+          if ! docker compose version >/dev/null 2>&1; then
+            cat <<'MSG' >&2
+          Docker Compose v2 plugin is missing on staging (`docker compose` unknown).
+
+          Install:
+            sudo apt-get update
+            sudo apt-get install -y docker-compose-plugin
+            docker compose version
+          MSG
+            exit 1
+          fi
+          command -v jq >/dev/null || { echo "jq is required on staging"; exit 1; }
+          docker info >/dev/null
+          EOF
       - name: Transfer bundle and images
         env:
           HOST: ${{ secrets.STAGING_HOST }}

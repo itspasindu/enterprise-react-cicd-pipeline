@@ -8,6 +8,21 @@ PREVIOUS_ENV="${DEPLOY_ROOT}/previous.env"
 
 [ -f "$PREVIOUS_ENV" ] || { echo "No previous release metadata; rollback skipped."; exit 0; }
 
+command -v docker >/dev/null || { echo "Docker is required"; exit 1; }
+if ! docker compose version >/dev/null 2>&1; then
+  cat <<'MSG' >&2
+Docker Compose v2 is required (`docker compose`), not the legacy `docker-compose` binary.
+
+Install on Ubuntu/Debian:
+  sudo apt-get update
+  sudo apt-get install -y docker-compose-plugin
+  docker compose version
+
+Then re-run CD.
+MSG
+  exit 1
+fi
+
 echo "Rolling application containers back to previous image digests..."
 # Database data and migrations are intentionally not rolled back.
 docker compose --env-file "$PREVIOUS_ENV" -f "$COMPOSE_FILE" up -d postgres --wait
