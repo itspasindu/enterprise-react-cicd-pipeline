@@ -8,6 +8,7 @@ CURRENT_ENV="${DEPLOY_ROOT}/current.env"
 PREVIOUS_ENV="${DEPLOY_ROOT}/previous.env"
 POSTGRES_DB="${POSTGRES_DB:-platform}"
 POSTGRES_USER="${POSTGRES_USER:-platform}"
+APP_PORT="${APP_PORT:-4173}"
 : "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
 
 command -v docker >/dev/null || { echo "Docker is required"; exit 1; }
@@ -40,7 +41,7 @@ NEXT_ENV="$(mktemp "${DEPLOY_ROOT}/release.XXXXXX")"
 trap 'rm -f "$NEXT_ENV"' EXIT
 cat > "$NEXT_ENV" <<EOF
 COMPOSE_PROJECT_NAME=platform
-APP_PORT=4173
+APP_PORT=${APP_PORT}
 POSTGRES_DB=${POSTGRES_DB}
 POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -57,11 +58,16 @@ echo "Applying forward-only database migrations..."
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm api node src/migrate.js
 
 echo "Deploying API and web images by digest..."
+CONFLICTING_CONTAINERS="$(docker ps --filter "publish=${APP_PORT}" --format '{{.ID}}')"
+if [ -n "$CONFLICTING_CONTAINERS" ]; then
+  echo "Found containers using host port ${APP_PORT}; removing them before deploy."
+  echo "$CONFLICTING_CONTAINERS" | xargs -r docker rm -f >/dev/null
+fi
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans
 
 echo "Running full-stack health checks..."
-curl --fail --silent --show-error http://127.0.0.1:4173/api/ready >/dev/null
-curl --fail --silent --show-error http://127.0.0.1:4173/ >/dev/null
+curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/ready" >/dev/null
+curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/" >/dev/null
 
 mv "$NEXT_ENV" "$CURRENT_ENV"
 trap - EXIT
