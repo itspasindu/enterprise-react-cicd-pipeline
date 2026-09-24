@@ -93,6 +93,7 @@ Add:
 | `STAGING_SSH_KNOWN_HOSTS` | verified `ssh-keyscan` output |
 | `POSTGRES_PASSWORD` | strong database password |
 | `TAILSCALE_AUTHKEY` | optional reusable/ephemeral auth key |
+| `PIPELINE_GITHUB_TOKEN` | fine-grained token that can read this repo's Actions. CD writes it to the API as `GITHUB_TOKEN`. The built-in Actions token expires when the job ends, so it cannot drive the live status page. |
 
 Generate host keys from a trusted network path:
 

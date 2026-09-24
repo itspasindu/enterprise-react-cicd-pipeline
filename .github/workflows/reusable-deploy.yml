@@ -19,6 +19,8 @@ on:
         required: true
       TAILSCALE_AUTHKEY:
         required: false
+      PIPELINE_GITHUB_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -167,13 +169,18 @@ jobs:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          PIPELINE_GITHUB_TOKEN: ${{ secrets.PIPELINE_GITHUB_TOKEN }}
+          GITHUB_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPO: ${{ github.event.repository.name }}
         run: |
           PASSWORD_B64="$(printf '%s' "$POSTGRES_PASSWORD" | base64 -w 0)"
+          TOKEN_B64="$(printf '%s' "$PIPELINE_GITHUB_TOKEN" | base64 -w 0)"
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            "${USER}@${HOST}" "DEPLOY_ROOT=${DEPLOY_ROOT} POSTGRES_PASSWORD_B64=${PASSWORD_B64} bash -s" <<'EOF'
+            "${USER}@${HOST}" "DEPLOY_ROOT=${DEPLOY_ROOT} POSTGRES_PASSWORD_B64=${PASSWORD_B64} GITHUB_TOKEN_B64=${TOKEN_B64} GITHUB_OWNER=${GITHUB_OWNER} GITHUB_REPO=${GITHUB_REPO} bash -s" <<'EOF'
           set -euo pipefail
           command -v jq >/dev/null || { echo "jq is required on staging"; exit 1; }
           export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
+          export GITHUB_TOKEN="$(printf '%s' "$GITHUB_TOKEN_B64" | base64 -d)"
           echo "Deploy metadata webImage=$(jq -er '.webImage' "$DEPLOY_ROOT/release-metadata.json")"
           chmod +x "$DEPLOY_ROOT/deploy-stack.sh" "$DEPLOY_ROOT/rollback-stack.sh" "$DEPLOY_ROOT/health-check.sh"
           "$DEPLOY_ROOT/deploy-stack.sh"
