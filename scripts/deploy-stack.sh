@@ -58,7 +58,10 @@ echo "Applying forward-only database migrations..."
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm api node src/migrate.js
 
 echo "Deploying API and web images by digest..."
-CONFLICTING_CONTAINERS="$(docker ps --filter "publish=${APP_PORT}" --format '{{.ID}}')"
+CONFLICTING_CONTAINERS="$(
+  docker ps --format '{{.ID}} {{.Ports}}' \
+    | awk -v port="$APP_PORT" '$0 ~ ("[[:space:]](0\\.0\\.0\\.0|\\[::\\]|::):" port "->") { print $1 }'
+)"
 if [ -n "$CONFLICTING_CONTAINERS" ]; then
   echo "Found containers using host port ${APP_PORT}; removing them before deploy."
   echo "$CONFLICTING_CONTAINERS" | xargs -r docker rm -f >/dev/null
