@@ -56,10 +56,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          WEB_IMAGE="$(jq -er '.webImage' release/release-metadata.json)"
-          API_IMAGE="$(jq -er '.apiImage' release/release-metadata.json)"
-          docker pull "$WEB_IMAGE"
-          docker pull "$API_IMAGE"
+          WEB_IMAGE_DIGEST="$(jq -er '.webImage' release/release-metadata.json)"
+          API_IMAGE_DIGEST="$(jq -er '.apiImage' release/release-metadata.json)"
+          docker pull "$WEB_IMAGE_DIGEST"
+          docker pull "$API_IMAGE_DIGEST"
+
+          WEB_IMAGE="platform-web:staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          API_IMAGE="platform-api:staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker tag "$WEB_IMAGE_DIGEST" "$WEB_IMAGE"
+          docker tag "$API_IMAGE_DIGEST" "$API_IMAGE"
+
+          TMP_METADATA="$(mktemp)"
+          jq --arg web "$WEB_IMAGE" --arg api "$API_IMAGE" \
+            '.webImage = $web | .apiImage = $api' \
+            release/release-metadata.json > "$TMP_METADATA"
+          mv "$TMP_METADATA" release/release-metadata.json
+
           printf 'WEB_IMAGE=%s\nAPI_IMAGE=%s\n' "$WEB_IMAGE" "$API_IMAGE" >> "$GITHUB_ENV"
       - name: Resolve staging deploy root
         env:
