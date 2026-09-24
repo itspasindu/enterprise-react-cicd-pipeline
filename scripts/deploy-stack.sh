@@ -58,54 +58,42 @@ ensure_local_tag() {
   exit 1
 }
 
-# Free APP_PORT from Docker publishes and leftover host processes (node/vite preview).
+# Docker platform-web is the only process that should bind APP_PORT.
+# Stop a leftover Node/Vite preview (and its user systemd unit) with no delay,
+# then return so the caller can run compose up immediately.
 free_host_port() {
   local port="$1"
-  local ids=""
-  local pids=""
+  local ids="" pid="" unit=""
 
   ids="$(docker ps -aq --filter "publish=${port}" 2>/dev/null || true)"
-  if [ -z "$ids" ]; then
-    ids="$(
-      docker ps -aq --format '{{.ID}} {{.Ports}}' \
-        | awk -v p=":${port}->" 'index($0, p) { print $1 }'
-    )"
-  fi
-
   if [ -n "$ids" ]; then
-    echo "Freeing host port ${port}; removing container(s): $(echo "$ids" | tr '\n' ' ')"
+    echo "Removing container(s) publishing ${port}"
     # shellcheck disable=SC2086
     docker rm -f $ids >/dev/null
   fi
 
-  if command -v fuser >/dev/null 2>&1; then
+  if ! command -v ss >/dev/null 2>&1; then
     fuser -k "${port}/tcp" 2>/dev/null || true
-    sleep 1
+    return 0
   fi
 
-  pids="$(
-    ss -tlnp 2>/dev/null | awk -v p=":"$port"$" '
-      $4 ~ p {
-        if (match($0, /pid=[0-9]+/)) print substr($0, RSTART+4, RLENGTH-4)
-      }' | sort -u
-  )"
-  if [ -n "$pids" ]; then
-    echo "Killing host process(es) on port ${port}: $(echo "$pids" | tr '\n' ' ')"
-    # shellcheck disable=SC2086
-    kill $pids 2>/dev/null || true
-    sleep 1
-    # shellcheck disable=SC2086
-    kill -9 $pids 2>/dev/null || true
-  fi
-
-  if command -v ss >/dev/null 2>&1; then
-    if ss -tlnH "sport = :${port}" 2>/dev/null | grep -q .; then
-      echo "Host port ${port} is still in use after cleanup:" >&2
-      ss -tlnp "sport = :${port}" 2>/dev/null || ss -tln "sport = :${port}" 2>/dev/null || true
-      echo "Stop the process above (often a leftover node preview) and re-run CD." >&2
-      exit 1
+  while read -r pid; do
+    [ -n "$pid" ] || continue
+    unit="$(systemctl --user status "$pid" --no-pager 2>/dev/null | awk 'NR==1 { gsub(/●/,""); print $1; exit }' || true)"
+    if [ -n "$unit" ] && [[ "$unit" == *.service ]]; then
+      echo "Stopping user service ${unit} (was holding port ${port})"
+      systemctl --user stop "$unit" 2>/dev/null || true
+      systemctl --user disable "$unit" 2>/dev/null || true
     fi
-  fi
+    echo "Stopping host process ${pid} on port ${port}"
+    kill -9 "$pid" 2>/dev/null || true
+  done < <(
+    ss -tlnp 2>/dev/null | awk -v p=":${port}$" '
+      $4 ~ p && match($0, /pid=[0-9]+/) {
+        print substr($0, RSTART+4, RLENGTH-4)
+      }'
+  )
+  fuser -k "${port}/tcp" 2>/dev/null || true
 }
 
 ensure_local_tag "$WEB_IMAGE" "$WEB_ID" "$WEB_REF"
@@ -142,11 +130,16 @@ echo "Applying forward-only database migrations..."
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm --pull never api node src/migrate.js
 
 echo "Deploying API and web images (${WEB_IMAGE}, ${API_IMAGE})..."
-# Stop published web first, then free anything else still bound to APP_PORT.
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" stop web >/dev/null 2>&1 || true
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" rm -f web >/dev/null 2>&1 || true
+# Free 4173 in the same moment as compose up. An earlier kill lets a Node
+# preview respawn during Postgres/migrations and steal the port again.
 free_host_port "$APP_PORT"
-docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build
+if ! docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build; then
+  echo "Compose up failed; freeing port ${APP_PORT} and retrying once" >&2
+  free_host_port "$APP_PORT"
+  docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build
+fi
 
 echo "Running full-stack health checks..."
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/ready" >/dev/null

@@ -77,6 +77,8 @@ Log out and back in, then confirm `docker info` works without `sudo`.
 
 Only SSH and application port 4173 need to be reachable from the Actions runner. PostgreSQL and the API are not exposed directly.
 
+Do not run `npm run preview`, Vite, or any other Node process on port 4173 on the staging VM. The `platform-web` container is the only listener on that port. A leftover preview will be killed during deploy and, if something restarts it, Compose fails with `address already in use`.
+
 ## GitHub staging environment
 
 Repository → Settings → Environments → create `staging`.
