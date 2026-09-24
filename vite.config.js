@@ -27,8 +27,8 @@ export default defineConfig(({ mode }) => ({
       manifest: {
         name: 'Enterprise React App',
         short_name: 'ERA',
-        theme_color: '#f8fafc',
-        background_color: '#f8fafc',
+        theme_color: '#f4f7fb',
+        background_color: '#f4f7fb',
         display: 'standalone',
         start_url: '/',
         icons: [

@@ -28,9 +28,18 @@ function App() {
           content="See whether software builds and releases are healthy — in plain language."
         />
       </Helmet>
-      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800">
+      <div className="min-h-screen flex flex-col text-slate-800">
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-xl focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:shadow-lg"
+        >
+          Skip to content
+        </a>
         <Navbar />
-        <main className="container mx-auto px-4 py-8 flex-1">
+        <main
+          id="main-content"
+          className="container mx-auto px-4 py-8 md:py-10 flex-1 animate-fade"
+        >
           <Suspense fallback={<LoadingSpinner />}>
             <Routes>
               <Route path="/" element={<Home />} />
@@ -48,11 +57,13 @@ function App() {
             </Routes>
           </Suspense>
         </main>
-        <footer className="border-t border-slate-200 bg-white py-6">
-          <div className="container mx-auto px-4 text-center text-slate-500 text-sm">
+        <footer className="border-t border-slate-200/80 bg-white/70 backdrop-blur-sm py-8 mt-4">
+          <div className="container mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-3 text-sm text-slate-500">
             <p>
-              &copy; {new Date().getFullYear()} {APP_NAME}. Built to make delivery status easy to
-              understand.
+              &copy; {new Date().getFullYear()} {APP_NAME}
+            </p>
+            <p className="text-center md:text-right">
+              Built to make delivery status easy to understand.
             </p>
           </div>
         </footer>
