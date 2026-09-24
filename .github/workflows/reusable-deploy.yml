@@ -162,46 +162,6 @@ jobs:
           # Separate archives. Saving both image IDs in one stream left the VM
           # with a single loaded image and no tag for the web config digest.
           bash scripts/transfer-release-images.sh
-      - name: Free staging port 4173
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ secrets.STAGING_USER }}
-          APP_PORT: '4173'
-        run: |
-          set -euo pipefail
-          SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
-          ssh $SSH_OPTS "${USER}@${HOST}" "APP_PORT=${APP_PORT} bash -s" <<'EOF'
-          set -euo pipefail
-          echo "Checking host port ${APP_PORT}..."
-          docker ps -aq --filter "publish=${APP_PORT}" | xargs -r docker rm -f >/dev/null 2>&1 || true
-          # Kill non-Docker listeners owned by this user (e.g. leftover node/vite preview)
-          if command -v fuser >/dev/null 2>&1; then
-            fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
-          fi
-          PIDS="$(ss -tlnp 2>/dev/null | awk -v p=":"$APP_PORT"$" '
-            $4 ~ p {
-              if (match($0, /pid=[0-9]+/)) {
-                pid=substr($0, RSTART+4, RLENGTH-4)
-                print pid
-              }
-            }' | sort -u)"
-          if [ -n "${PIDS}" ]; then
-            echo "Killing processes still listening on ${APP_PORT}: ${PIDS}"
-            # shellcheck disable=SC2086
-            kill ${PIDS} 2>/dev/null || true
-            sleep 1
-            # shellcheck disable=SC2086
-            kill -9 ${PIDS} 2>/dev/null || true
-          fi
-          sleep 1
-          if ss -tlnH "sport = :${APP_PORT}" 2>/dev/null | grep -q .; then
-            echo "::error::Port ${APP_PORT} is still in use on staging (often a leftover node preview)."
-            ss -tlnp "sport = :${APP_PORT}" 2>/dev/null || ss -tln "sport = :${APP_PORT}" || true
-            echo "On the VM run: fuser -k ${APP_PORT}/tcp   OR   kill the pid shown above"
-            exit 1
-          fi
-          echo "Port ${APP_PORT} is free"
-          EOF
       - name: Deploy Compose stack
         env:
           HOST: ${{ secrets.STAGING_HOST }}
