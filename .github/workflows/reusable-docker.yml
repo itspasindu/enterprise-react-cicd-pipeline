@@ -207,7 +207,7 @@ jobs:
         run: |
           mkdir release
           cp compose.yml web-sbom.cyclonedx.json api-sbom.cyclonedx.json release/
-          cp scripts/deploy-stack.sh scripts/rollback-stack.sh scripts/health-check.sh release/
+          cp scripts/deploy-stack.sh scripts/rollback-stack.sh scripts/health-check.sh scripts/free-host-port.sh release/
           jq -n \
             --arg version "${{ steps.meta.outputs.version }}" \
             --arg sha "$GITHUB_SHA" \

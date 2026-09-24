@@ -24,22 +24,8 @@ if [ -f "$PREVIOUS_ENV" ]; then
   APP_PORT="${APP_PORT:-4173}"
 fi
 
-free_host_port() {
-  local port="$1"
-  local ids=""
-  ids="$(docker ps -aq --filter "publish=${port}" 2>/dev/null || true)"
-  if [ -z "$ids" ]; then
-    ids="$(
-      docker ps -aq --format '{{.ID}} {{.Ports}}' \
-        | awk -v p=":${port}->" 'index($0, p) { print $1 }'
-    )"
-  fi
-  if [ -n "$ids" ]; then
-    echo "Freeing host port ${port}; removing container(s): $(echo "$ids" | tr '\n' ' ')"
-    # shellcheck disable=SC2086
-    docker rm -f $ids >/dev/null
-  fi
-}
+# shellcheck source=free-host-port.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/free-host-port.sh"
 
 echo "Rolling application containers back to previous image digests..."
 # Database data and migrations are intentionally not rolled back.
