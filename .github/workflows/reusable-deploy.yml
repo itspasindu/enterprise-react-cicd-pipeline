@@ -152,34 +152,23 @@ jobs:
           set -euo pipefail
           SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
           VERSION="$(jq -er '.version' release/release-metadata.json)"
-          WEB_ID="$(docker image inspect -f '{{.Id}}' "$WEB_IMAGE")"
-          API_ID="$(docker image inspect -f '{{.Id}}' "$API_IMAGE")"
           LOCAL_WEB="platform-web:${VERSION}"
           LOCAL_API="platform-api:${VERSION}"
 
-          # Digest refs (name@sha256) do not survive docker save/load. Transfer by ID,
-          # retag locally, and rewrite metadata so deploy never sees GHCR digest refs.
+          # Save by local name:tag (not image ID / registry digest). After load those
+          # tags are restored on the VM; ID-based tag often fails for attestation images.
           ssh $SSH_OPTS "${USER}@${HOST}" "mkdir -p '${DEPLOY_ROOT}'"
           rsync -az -e "ssh $SSH_OPTS" release/ "${USER}@${HOST}:${DEPLOY_ROOT}/"
-          docker save "$WEB_ID" "$API_ID" | gzip | ssh $SSH_OPTS "${USER}@${HOST}" 'gunzip | docker load'
-          ssh $SSH_OPTS "${USER}@${HOST}" \
-            "docker tag '${WEB_ID}' '${LOCAL_WEB}' && docker tag '${API_ID}' '${LOCAL_API}' && docker image inspect '${LOCAL_WEB}' >/dev/null && docker image inspect '${LOCAL_API}' >/dev/null"
+          docker save "$WEB_IMAGE" "$API_IMAGE" | gzip | ssh $SSH_OPTS "${USER}@${HOST}" 'gunzip | docker load'
+          ssh $SSH_OPTS "${USER}@${HOST}"             "docker tag '${WEB_IMAGE}' '${LOCAL_WEB}' && docker tag '${API_IMAGE}' '${LOCAL_API}' && docker image inspect '${LOCAL_WEB}' >/dev/null && docker image inspect '${LOCAL_API}' >/dev/null"
 
-          jq -n \
-            --arg version "$VERSION" \
-            --arg sha "$(jq -er '.sha' release/release-metadata.json)" \
-            --arg web "$LOCAL_WEB" \
-            --arg api "$LOCAL_API" \
-            --arg webId "$WEB_ID" \
-            --arg apiId "$API_ID" \
-            --arg webDigest "$WEB_IMAGE" \
-            --arg apiDigest "$API_IMAGE" \
-            '{version:$version,sha:$sha,webImage:$web,apiImage:$api,webImageId:$webId,apiImageId:$apiId,webImageDigest:$webDigest,apiImageDigest:$apiDigest}' \
-            > /tmp/release-metadata.local.json
+          WEB_ID="$(ssh $SSH_OPTS "${USER}@${HOST}" "docker image inspect -f '{{.Id}}' '${LOCAL_WEB}'")"
+          API_ID="$(ssh $SSH_OPTS "${USER}@${HOST}" "docker image inspect -f '{{.Id}}' '${LOCAL_API}'")"
+
+          jq -n             --arg version "$VERSION"             --arg sha "$(jq -er '.sha' release/release-metadata.json)"             --arg web "$LOCAL_WEB"             --arg api "$LOCAL_API"             --arg webId "$WEB_ID"             --arg apiId "$API_ID"             --arg transferWeb "$WEB_IMAGE"             --arg transferApi "$API_IMAGE"             '{version:$version,sha:$sha,webImage:$web,apiImage:$api,webImageId:$webId,apiImageId:$apiId,transferWebImage:$transferWeb,transferApiImage:$transferApi}'             > /tmp/release-metadata.local.json
 
           scp $SSH_OPTS /tmp/release-metadata.local.json "${USER}@${HOST}:${DEPLOY_ROOT}/release-metadata.json"
           ssh $SSH_OPTS "${USER}@${HOST}" "jq -er '.webImage' '${DEPLOY_ROOT}/release-metadata.json'"
-          # Also replace deploy-stack.sh from this checkout's release bundle (already rsynced)
 
           echo "Staged ${LOCAL_WEB} (${WEB_ID}) and ${LOCAL_API} (${API_ID})"
       - name: Free staging port 4173
