@@ -134,7 +134,12 @@ echo "Starting PostgreSQL..."
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d postgres --wait
 
 echo "Applying forward-only database migrations..."
-docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm --no-build api node src/migrate.js
+# The Compose plugin CD installs (reusable-deploy.yml COMPOSE_VERSION, v2.32.4)
+# accepts --no-build on `up` and `create` only. `run --no-build` exits 16 with
+# "unknown flag: --no-build" before migrate.js starts. `run --pull never` is
+# supported: ensure_local_tag already required API_IMAGE on this host, and
+# pull_policy=never is not "build", so v2.32.4 skips rebuilding that image.
+docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm --pull never api node src/migrate.js
 
 echo "Deploying API and web images (${WEB_IMAGE}, ${API_IMAGE})..."
 # Stop published web first, then free anything else still bound to APP_PORT.

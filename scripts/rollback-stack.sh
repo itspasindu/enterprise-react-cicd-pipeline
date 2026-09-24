@@ -47,6 +47,8 @@ docker compose --env-file "$PREVIOUS_ENV" -f "$COMPOSE_FILE" up -d postgres --wa
 docker compose --env-file "$PREVIOUS_ENV" -f "$COMPOSE_FILE" stop web >/dev/null 2>&1 || true
 docker compose --env-file "$PREVIOUS_ENV" -f "$COMPOSE_FILE" rm -f web >/dev/null 2>&1 || true
 free_host_port "$APP_PORT"
+# `up --no-build` is valid on the Compose plugin CD installs (v2.32.4).
+# That flag is not valid on `run`; migrations in deploy-stack.sh use `run --pull never`.
 docker compose --env-file "$PREVIOUS_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build
 
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/ready" >/dev/null
