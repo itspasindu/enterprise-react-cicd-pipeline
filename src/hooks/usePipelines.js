@@ -54,7 +54,7 @@ export function usePipelineStatus() {
   )
 }
 
-export function usePipelineOverview() {
+export function usePipelineOverview({ enabled = true } = {}) {
   return useQuery(
     ['pipelines', 'overview'],
     async () => {
@@ -62,6 +62,7 @@ export function usePipelineOverview() {
       return data
     },
     {
+      enabled,
       retry: false,
       staleTime: 10_000,
       refetchInterval: data => liveInterval(data),

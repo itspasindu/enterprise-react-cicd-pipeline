@@ -10,31 +10,66 @@
   }
 
   body {
-    @apply bg-slate-50 text-slate-800;
-    font-family:
-      'Segoe UI',
-      system-ui,
-      -apple-system,
-      'Helvetica Neue',
-      sans-serif;
+    @apply text-slate-800 antialiased;
+    font-family: 'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif;
+    background-color: #f4f7fb;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(37, 99, 235, 0.12), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(13, 148, 136, 0.08), transparent);
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    @apply bg-blue-200/70 text-slate-900;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-blue-500 ring-offset-2 ring-offset-[#f4f7fb];
   }
 }
 
 @layer components {
   .btn-primary {
-    @apply px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold transition-all duration-200 shadow-sm hover:shadow-md;
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-semibold text-white
+      bg-blue-600 hover:bg-blue-700 active:bg-blue-800
+      shadow-[0_1px_2px_rgba(37,99,235,0.25),0_8px_20px_-8px_rgba(37,99,235,0.55)]
+      hover:shadow-[0_1px_2px_rgba(37,99,235,0.3),0_12px_24px_-8px_rgba(37,99,235,0.6)]
+      transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0
+      disabled:opacity-60 disabled:pointer-events-none disabled:shadow-none disabled:translate-y-0;
   }
 
   .btn-secondary {
-    @apply px-6 py-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl font-semibold transition-colors;
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-semibold
+      text-slate-700 bg-white/90 hover:bg-white border border-slate-200/90
+      shadow-sm hover:shadow-md hover:border-slate-300
+      transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0;
   }
 
   .card {
-    @apply bg-white border border-slate-200 rounded-2xl p-6 shadow-sm;
+    @apply bg-white/90 backdrop-blur-sm border border-slate-200/80 rounded-2xl p-6
+      shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-12px_rgba(15,23,42,0.1)]
+      transition-shadow duration-200;
+  }
+
+  .card-interactive {
+    @apply card hover:border-blue-200 hover:shadow-[0_1px_2px_rgba(15,23,42,0.05),0_16px_32px_-12px_rgba(37,99,235,0.18)]
+      hover:-translate-y-0.5 transition-all duration-200;
+  }
+
+  .metric-card {
+    @apply card relative overflow-hidden;
+  }
+
+  .metric-card::before {
+    content: '';
+    @apply absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-500 to-teal-500 opacity-80;
   }
 
   .input-field {
-    @apply w-full px-4 py-3 bg-white border border-slate-300 rounded-xl text-slate-800 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent;
+    @apply w-full px-4 py-3 bg-white border border-slate-300 rounded-xl text-slate-800
+      placeholder:text-slate-400 outline-none
+      shadow-sm transition-shadow duration-150
+      focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500;
   }
 
   .page-title {
@@ -45,13 +80,61 @@
     @apply text-base md:text-lg text-slate-600 leading-relaxed;
   }
 
+  .section-label {
+    @apply text-xs font-semibold uppercase tracking-[0.08em] text-slate-500;
+  }
+
   .muted {
     @apply text-slate-500;
+  }
+
+  .nav-pill {
+    @apply px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200;
+  }
+
+  .nav-pill-active {
+    @apply bg-blue-600 text-white shadow-sm shadow-blue-600/25;
+  }
+
+  .nav-pill-idle {
+    @apply text-slate-600 hover:text-slate-900 hover:bg-white/80;
+  }
+
+  .soft-panel {
+    @apply rounded-2xl border border-slate-200/80 bg-white/70 backdrop-blur-sm;
   }
 }
 
 @layer utilities {
   .text-gradient {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-teal-600;
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-blue-600 to-teal-600;
+  }
+
+  .animate-rise {
+    animation: rise-in 0.55s ease-out both;
+  }
+
+  .animate-fade {
+    animation: fade-in 0.45s ease-out both;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }

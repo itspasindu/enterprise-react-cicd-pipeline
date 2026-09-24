@@ -5,11 +5,15 @@ import PipelineFlow from '@components/pipeline/PipelineFlow'
 import RunSummaryCard from '@components/pipeline/RunSummaryCard'
 import StatusBadge from '@components/pipeline/StatusBadge'
 import LoadingSpinner from '@components/LoadingSpinner'
-import { getPipelineErrorMeta, usePipelineOverview } from '@hooks/usePipelines'
+import { getPipelineErrorMeta, usePipelineOverview, usePipelineStatus } from '@hooks/usePipelines'
 import { PAGE_TITLES, ROUTES, TEST_IDS, pipelineRunPath } from '../../config/app-contract'
 
 function PipelineOverview() {
-  const { data, isLoading, error, isFetching, refetch, dataUpdatedAt } = usePipelineOverview()
+  const statusQuery = usePipelineStatus()
+  const configured = statusQuery.data?.configured === true
+  const { data, isLoading, error, isFetching, refetch, dataUpdatedAt } = usePipelineOverview({
+    enabled: configured,
+  })
   const errorMeta = getPipelineErrorMeta(error)
 
   return (
@@ -19,7 +23,7 @@ function PipelineOverview() {
       </Helmet>
 
       <div className="space-y-6" data-testid={TEST_IDS.pipelinePage}>
-        {errorMeta?.type === 'setup' ? (
+        {!configured ? (
           <p className="text-sm text-slate-600">
             Connect the API to GitHub to load live build and release results here.
           </p>
@@ -53,44 +57,38 @@ function PipelineOverview() {
             </div>
 
             <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="card">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Latest build
-                </p>
-                <div className="mt-2">
+              <div className="metric-card">
+                <p className="section-label">Latest build</p>
+                <div className="mt-3">
                   <StatusBadge status={data.latestCi?.conclusion || 'skipped'} />
                 </div>
               </div>
-              <div className="card">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Latest release
-                </p>
-                <div className="mt-2">
+              <div className="metric-card">
+                <p className="section-label">Latest release</p>
+                <div className="mt-3">
                   <StatusBadge status={data.latestCd?.conclusion || 'skipped'} />
                 </div>
               </div>
-              <div className="card">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Open problems
+              <div className="metric-card">
+                <p className="section-label">Open problems</p>
+                <p className="mt-3 text-3xl font-extrabold tracking-tight text-slate-900">
+                  {data.openFailureCount}
                 </p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">{data.openFailureCount}</p>
                 <Link
                   to={ROUTES.pipelineFailures}
-                  className="mt-1 inline-block text-sm font-semibold text-blue-700 hover:underline"
+                  className="mt-2 inline-block text-sm font-bold text-blue-700 hover:underline"
                 >
                   View problems
                 </Link>
               </div>
-              <div className="card">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Live website
-                </p>
-                <div className="mt-2">
+              <div className="metric-card">
+                <p className="section-label">Live website</p>
+                <div className="mt-3">
                   <StatusBadge status={data.staging?.ready ? 'success' : 'failure'} />
                 </div>
                 <Link
                   to={ROUTES.pipelineStaging}
-                  className="mt-1 inline-block text-sm font-semibold text-blue-700 hover:underline"
+                  className="mt-2 inline-block text-sm font-bold text-blue-700 hover:underline"
                 >
                   Check website
                 </Link>

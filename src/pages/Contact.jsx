@@ -31,28 +31,27 @@ function Contact() {
         <meta name="description" content="Send a message to the team" />
       </Helmet>
 
-      <div className="max-w-xl mx-auto" data-testid={TEST_IDS.contactPage}>
-        <h1 className="page-title text-center">Contact the team</h1>
-        <p className="page-subtitle mb-8 text-center">
-          Send a short message and we will get back to you.
-        </p>
+      <div className="max-w-xl mx-auto animate-rise" data-testid={TEST_IDS.contactPage}>
+        <div className="text-center mb-8">
+          <p className="section-label mb-2">Get in touch</p>
+          <h1 className="page-title">Contact the team</h1>
+          <p className="page-subtitle mt-3">Send a short message and we will get back to you.</p>
+        </div>
 
-        <div className="card">
+        <div className="card shadow-lift">
           {submitted ? (
-            <div className="text-center py-8" data-testid={TEST_IDS.contactSuccess}>
-              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-2xl text-emerald-700">
+            <div className="text-center py-10" data-testid={TEST_IDS.contactSuccess}>
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-50 text-3xl text-emerald-700 shadow-sm">
                 ✓
               </div>
-              <h3 className="text-xl font-semibold text-emerald-700">
-                {CONTACT_FORM.successHeading}
-              </h3>
+              <h3 className="text-xl font-bold text-emerald-700">{CONTACT_FORM.successHeading}</h3>
               <p className="text-slate-600 mt-2">We will get back to you soon.</p>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5" data-testid={TEST_IDS.contactForm}>
               {error && (
                 <p
-                  className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-rose-700"
+                  className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700"
                   role="alert"
                   data-testid={TEST_IDS.contactError}
                 >
