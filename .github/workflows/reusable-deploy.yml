@@ -32,10 +32,6 @@ jobs:
     env:
       TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
     steps:
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
-        with:
-          name: ${{ inputs.artifact-name }}
-          path: release/
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           sparse-checkout: |
@@ -43,8 +39,13 @@ jobs:
             scripts/rollback-stack.sh
             scripts/health-check.sh
           sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: release/
       - name: Overlay latest deploy scripts into release bundle
         run: |
+          test -d release
           cp scripts/deploy-stack.sh scripts/rollback-stack.sh scripts/health-check.sh release/
           chmod +x release/deploy-stack.sh release/rollback-stack.sh release/health-check.sh
       - name: Connect to Tailscale
