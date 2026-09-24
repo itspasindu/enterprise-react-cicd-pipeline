@@ -58,6 +58,56 @@ ensure_local_tag() {
   exit 1
 }
 
+# Free APP_PORT from Docker publishes and leftover host processes (node/vite preview).
+free_host_port() {
+  local port="$1"
+  local ids=""
+  local pids=""
+
+  ids="$(docker ps -aq --filter "publish=${port}" 2>/dev/null || true)"
+  if [ -z "$ids" ]; then
+    ids="$(
+      docker ps -aq --format '{{.ID}} {{.Ports}}' \
+        | awk -v p=":${port}->" 'index($0, p) { print $1 }'
+    )"
+  fi
+
+  if [ -n "$ids" ]; then
+    echo "Freeing host port ${port}; removing container(s): $(echo "$ids" | tr '\n' ' ')"
+    # shellcheck disable=SC2086
+    docker rm -f $ids >/dev/null
+  fi
+
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k "${port}/tcp" 2>/dev/null || true
+    sleep 1
+  fi
+
+  pids="$(
+    ss -tlnp 2>/dev/null | awk -v p=":"$port"$" '
+      $4 ~ p {
+        if (match($0, /pid=[0-9]+/)) print substr($0, RSTART+4, RLENGTH-4)
+      }' | sort -u
+  )"
+  if [ -n "$pids" ]; then
+    echo "Killing host process(es) on port ${port}: $(echo "$pids" | tr '\n' ' ')"
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    sleep 1
+    # shellcheck disable=SC2086
+    kill -9 $pids 2>/dev/null || true
+  fi
+
+  if command -v ss >/dev/null 2>&1; then
+    if ss -tlnH "sport = :${port}" 2>/dev/null | grep -q .; then
+      echo "Host port ${port} is still in use after cleanup:" >&2
+      ss -tlnp "sport = :${port}" 2>/dev/null || ss -tln "sport = :${port}" 2>/dev/null || true
+      echo "Stop the process above (often a leftover node preview) and re-run CD." >&2
+      exit 1
+    fi
+  fi
+}
+
 ensure_local_tag "$WEB_IMAGE" "$WEB_ID" "$WEB_REF"
 ensure_local_tag "$API_IMAGE" "$API_ID" "$API_REF"
 
@@ -87,14 +137,10 @@ echo "Applying forward-only database migrations..."
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm --no-build api node src/migrate.js
 
 echo "Deploying API and web images (${WEB_IMAGE}, ${API_IMAGE})..."
-CONFLICTING_CONTAINERS="$(
-  docker ps --format '{{.ID}} {{.Ports}}' \
-    | awk -v port="$APP_PORT" '$0 ~ ("[[:space:]](0\\.0\\.0\\.0|\\[::\\]|::):" port "->") { print $1 }'
-)"
-if [ -n "$CONFLICTING_CONTAINERS" ]; then
-  echo "Found containers using host port ${APP_PORT}; removing them before deploy."
-  echo "$CONFLICTING_CONTAINERS" | xargs -r docker rm -f >/dev/null
-fi
+# Stop published web first, then free anything else still bound to APP_PORT.
+docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" stop web >/dev/null 2>&1 || true
+docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" rm -f web >/dev/null 2>&1 || true
+free_host_port "$APP_PORT"
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build
 
 echo "Running full-stack health checks..."
