@@ -101,12 +101,11 @@ Deployment steps:
 3. Optionally connect the runner with Tailscale.
 4. Verify the pinned SSH host key.
 5. Pull both immutable image digests on the runner.
-6. Stream images over SSH with `docker save | gzip` and `docker load`, then retag as `platform-web:<CalVer>` / `platform-api:<CalVer>` (digest refs do not survive load).
-7. Copy Compose, scripts, SBOMs, and metadata to `/opt/platform`.
-8. Start PostgreSQL and wait for health.
-9. Apply forward-only migrations.
-10. Roll out API and web and wait for Compose health.
-11. Smoke-test `/`, `/about`, `/contact`, `/api/health`, and `/api/ready`.
+6. Copy the release bundle (Compose, scripts, and SBOMs) to the deploy root (`/opt/platform` when writable). Transfer each image as its own `docker save` archive (`scp`, then `docker load -i`). Confirm both tags exist, retag as `platform-web:<CalVer>` / `platform-api:<CalVer>`, and rewrite `release-metadata.json` so Compose never receives a GHCR digest ref.
+7. Start PostgreSQL and wait for health.
+8. Apply forward-only migrations.
+9. Roll out API and web and wait for Compose health.
+10. Smoke-test `/`, `/about`, `/contact`, `/api/health`, and `/api/ready`.
 
 The VM does not need outbound access to GHCR.
 

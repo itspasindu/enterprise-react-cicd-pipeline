@@ -130,7 +130,7 @@ ghcr.io/<owner>/platform-api:YYYY.MM.N
 
 Each image also has `:staging` and `:sha-<short>` tags. Deployment uses immutable digest references (`@sha256:...`), not mutable tags.
 
-`cd.yml` starts after successful CI, downloads `release-bundle`, transfers both images over SSH (`docker save | docker load`), applies migrations, and rolls out Compose. If deploy or smoke checks fail, it invokes the reusable rollback workflow. Database data/migrations are never automatically rolled back.
+`cd.yml` starts after successful CI, downloads `release-bundle`, transfers each image over SSH as its own archive (`docker save`, `scp`, `docker load`), applies migrations, and rolls out Compose. If deploy or smoke checks fail, it invokes the reusable rollback workflow. Database data/migrations are never automatically rolled back.
 
 ## Required staging environment secrets
 
