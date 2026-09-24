@@ -36,6 +36,17 @@ jobs:
         with:
           name: ${{ inputs.artifact-name }}
           path: release/
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          sparse-checkout: |
+            scripts/deploy-stack.sh
+            scripts/rollback-stack.sh
+            scripts/health-check.sh
+          sparse-checkout-cone-mode: false
+      - name: Overlay latest deploy scripts into release bundle
+        run: |
+          cp scripts/deploy-stack.sh scripts/rollback-stack.sh scripts/health-check.sh release/
+          chmod +x release/deploy-stack.sh release/rollback-stack.sh release/health-check.sh
       - name: Connect to Tailscale
         if: env.TAILSCALE_AUTHKEY != ''
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
@@ -126,7 +137,8 @@ jobs:
             *) echo "Unsupported staging arch: $REMOTE_UNAME"; exit 1 ;;
           esac
 
-          curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${ARCH}"             -o /tmp/docker-compose
+          curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${ARCH}" \
+            -o /tmp/docker-compose
           chmod +x /tmp/docker-compose
           ssh $SSH_OPTS "${USER}@${HOST}" 'mkdir -p "$HOME/.docker/cli-plugins"'
           scp $SSH_OPTS /tmp/docker-compose "${USER}@${HOST}:.docker/cli-plugins/docker-compose"
@@ -136,10 +148,79 @@ jobs:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
         run: |
+          set -euo pipefail
           SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          VERSION="$(jq -er '.version' release/release-metadata.json)"
+          WEB_ID="$(docker image inspect -f '{{.Id}}' "$WEB_IMAGE")"
+          API_ID="$(docker image inspect -f '{{.Id}}' "$API_IMAGE")"
+          LOCAL_WEB="platform-web:${VERSION}"
+          LOCAL_API="platform-api:${VERSION}"
+
+          # Digest refs (name@sha256) do not survive docker save/load. Transfer by ID,
+          # retag locally, and rewrite metadata so deploy never sees GHCR digest refs.
           ssh $SSH_OPTS "${USER}@${HOST}" "mkdir -p '${DEPLOY_ROOT}'"
           rsync -az -e "ssh $SSH_OPTS" release/ "${USER}@${HOST}:${DEPLOY_ROOT}/"
-          docker save "$WEB_IMAGE" "$API_IMAGE" | gzip | ssh $SSH_OPTS "${USER}@${HOST}" 'gunzip | docker load'
+          docker save "$WEB_ID" "$API_ID" | gzip | ssh $SSH_OPTS "${USER}@${HOST}" 'gunzip | docker load'
+          ssh $SSH_OPTS "${USER}@${HOST}" \
+            "docker tag '${WEB_ID}' '${LOCAL_WEB}' && docker tag '${API_ID}' '${LOCAL_API}' && docker image inspect '${LOCAL_WEB}' >/dev/null && docker image inspect '${LOCAL_API}' >/dev/null"
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg sha "$(jq -er '.sha' release/release-metadata.json)" \
+            --arg web "$LOCAL_WEB" \
+            --arg api "$LOCAL_API" \
+            --arg webId "$WEB_ID" \
+            --arg apiId "$API_ID" \
+            --arg webDigest "$WEB_IMAGE" \
+            --arg apiDigest "$API_IMAGE" \
+            '{version:$version,sha:$sha,webImage:$web,apiImage:$api,webImageId:$webId,apiImageId:$apiId,webImageDigest:$webDigest,apiImageDigest:$apiDigest}' \
+            > /tmp/release-metadata.local.json
+
+          scp $SSH_OPTS /tmp/release-metadata.local.json "${USER}@${HOST}:${DEPLOY_ROOT}/release-metadata.json"
+          ssh $SSH_OPTS "${USER}@${HOST}" "jq -er '.webImage' '${DEPLOY_ROOT}/release-metadata.json'"
+          # Also replace deploy-stack.sh from this checkout's release bundle (already rsynced)
+
+          echo "Staged ${LOCAL_WEB} (${WEB_ID}) and ${LOCAL_API} (${API_ID})"
+      - name: Free staging port 4173
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+          APP_PORT: '4173'
+        run: |
+          set -euo pipefail
+          SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          ssh $SSH_OPTS "${USER}@${HOST}" "APP_PORT=${APP_PORT} bash -s" <<'EOF'
+          set -euo pipefail
+          echo "Checking host port ${APP_PORT}..."
+          docker ps -aq --filter "publish=${APP_PORT}" | xargs -r docker rm -f >/dev/null 2>&1 || true
+          # Kill non-Docker listeners owned by this user (e.g. leftover node/vite preview)
+          if command -v fuser >/dev/null 2>&1; then
+            fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
+          fi
+          PIDS="$(ss -tlnp 2>/dev/null | awk -v p=":"$APP_PORT"$" '
+            $4 ~ p {
+              if (match($0, /pid=[0-9]+/)) {
+                pid=substr($0, RSTART+4, RLENGTH-4)
+                print pid
+              }
+            }' | sort -u)"
+          if [ -n "${PIDS}" ]; then
+            echo "Killing processes still listening on ${APP_PORT}: ${PIDS}"
+            # shellcheck disable=SC2086
+            kill ${PIDS} 2>/dev/null || true
+            sleep 1
+            # shellcheck disable=SC2086
+            kill -9 ${PIDS} 2>/dev/null || true
+          fi
+          sleep 1
+          if ss -tlnH "sport = :${APP_PORT}" 2>/dev/null | grep -q .; then
+            echo "::error::Port ${APP_PORT} is still in use on staging (often a leftover node preview)."
+            ss -tlnp "sport = :${APP_PORT}" 2>/dev/null || ss -tln "sport = :${APP_PORT}" || true
+            echo "On the VM run: fuser -k ${APP_PORT}/tcp   OR   kill the pid shown above"
+            exit 1
+          fi
+          echo "Port ${APP_PORT} is free"
+          EOF
       - name: Deploy Compose stack
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -152,6 +233,7 @@ jobs:
           set -euo pipefail
           command -v jq >/dev/null || { echo "jq is required on staging"; exit 1; }
           export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
+          echo "Deploy metadata webImage=$(jq -er '.webImage' "$DEPLOY_ROOT/release-metadata.json")"
           chmod +x "$DEPLOY_ROOT/deploy-stack.sh" "$DEPLOY_ROOT/rollback-stack.sh" "$DEPLOY_ROOT/health-check.sh"
           "$DEPLOY_ROOT/deploy-stack.sh"
           EOF
