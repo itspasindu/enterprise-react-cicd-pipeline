@@ -38,6 +38,8 @@ jobs:
             scripts/deploy-stack.sh
             scripts/rollback-stack.sh
             scripts/health-check.sh
+            scripts/transfer-release-images.sh
+            scripts/lib/image-archive.sh
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
@@ -150,27 +152,14 @@ jobs:
           USER: ${{ secrets.STAGING_USER }}
         run: |
           set -euo pipefail
-          SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
           VERSION="$(jq -er '.version' release/release-metadata.json)"
-          LOCAL_WEB="platform-web:${VERSION}"
-          LOCAL_API="platform-api:${VERSION}"
-
-          # Save by local name:tag (not image ID / registry digest). After load those
-          # tags are restored on the VM; ID-based tag often fails for attestation images.
-          ssh $SSH_OPTS "${USER}@${HOST}" "mkdir -p '${DEPLOY_ROOT}'"
-          rsync -az -e "ssh $SSH_OPTS" release/ "${USER}@${HOST}:${DEPLOY_ROOT}/"
-          docker save "$WEB_IMAGE" "$API_IMAGE" | gzip | ssh $SSH_OPTS "${USER}@${HOST}" 'gunzip | docker load'
-          ssh $SSH_OPTS "${USER}@${HOST}"             "docker tag '${WEB_IMAGE}' '${LOCAL_WEB}' && docker tag '${API_IMAGE}' '${LOCAL_API}' && docker image inspect '${LOCAL_WEB}' >/dev/null && docker image inspect '${LOCAL_API}' >/dev/null"
-
-          WEB_ID="$(ssh $SSH_OPTS "${USER}@${HOST}" "docker image inspect -f '{{.Id}}' '${LOCAL_WEB}'")"
-          API_ID="$(ssh $SSH_OPTS "${USER}@${HOST}" "docker image inspect -f '{{.Id}}' '${LOCAL_API}'")"
-
-          jq -n             --arg version "$VERSION"             --arg sha "$(jq -er '.sha' release/release-metadata.json)"             --arg web "$LOCAL_WEB"             --arg api "$LOCAL_API"             --arg webId "$WEB_ID"             --arg apiId "$API_ID"             --arg transferWeb "$WEB_IMAGE"             --arg transferApi "$API_IMAGE"             '{version:$version,sha:$sha,webImage:$web,apiImage:$api,webImageId:$webId,apiImageId:$apiId,transferWebImage:$transferWeb,transferApiImage:$transferApi}'             > /tmp/release-metadata.local.json
-
-          scp $SSH_OPTS /tmp/release-metadata.local.json "${USER}@${HOST}:${DEPLOY_ROOT}/release-metadata.json"
-          ssh $SSH_OPTS "${USER}@${HOST}" "jq -er '.webImage' '${DEPLOY_ROOT}/release-metadata.json'"
-
-          echo "Staged ${LOCAL_WEB} (${WEB_ID}) and ${LOCAL_API} (${API_ID})"
+          export VERSION
+          export LOCAL_WEB="platform-web:${VERSION}"
+          export LOCAL_API="platform-api:${VERSION}"
+          export RELEASE_DIR=release
+          # Separate archives. Saving both image IDs in one stream left the VM
+          # with a single loaded image and no tag for the web config digest.
+          bash scripts/transfer-release-images.sh
       - name: Free staging port 4173
         env:
           HOST: ${{ secrets.STAGING_HOST }}
