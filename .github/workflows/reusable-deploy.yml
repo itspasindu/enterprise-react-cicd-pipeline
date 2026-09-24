@@ -115,6 +115,8 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
+          # v2.32.4: `up`/`create` accept --no-build; `run` rejects it (exit 16).
+          # deploy-stack.sh migrations use `run --pull never` for that reason.
           COMPOSE_VERSION: v2.32.4
         run: |
           set -euo pipefail
