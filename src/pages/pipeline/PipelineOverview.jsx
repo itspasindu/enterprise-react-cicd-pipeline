@@ -29,9 +29,10 @@ function PipelineOverview() {
           </p>
         ) : null}
 
-        {errorMeta?.type === 'error' ? (
+        {errorMeta?.type === 'error' || errorMeta?.type === 'unavailable' ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-            {errorMeta.message}
+            <p className="font-semibold">{errorMeta.message}</p>
+            {errorMeta.hint ? <p className="mt-1 text-rose-700/90">{errorMeta.hint}</p> : null}
           </div>
         ) : null}
 

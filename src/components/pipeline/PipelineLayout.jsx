@@ -14,6 +14,7 @@ function PipelineLayout() {
   } = usePipelineStatus()
   const statusSetupError = getPipelineErrorMeta(statusError)
   const needsSetup = status?.configured === false || statusSetupError?.type === 'setup'
+  const apiDown = statusSetupError?.type === 'unavailable'
 
   return (
     <div className="space-y-6 animate-rise">
@@ -35,7 +36,17 @@ function PipelineLayout() {
         repo={status?.repo}
       />
 
-      {needsSetup ? (
+      {apiDown ? (
+        <div
+          className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-900"
+          role="status"
+        >
+          <p className="font-semibold">{statusSetupError.message}</p>
+          <p className="mt-1 text-rose-800/90">{statusSetupError.hint}</p>
+        </div>
+      ) : null}
+
+      {needsSetup && !apiDown ? (
         <SetupBanner
           message={statusSetupError?.message || 'Live status is not connected yet'}
           hint={status?.hint || statusSetupError?.hint}

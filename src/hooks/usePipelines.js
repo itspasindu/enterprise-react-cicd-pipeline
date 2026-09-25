@@ -5,6 +5,17 @@ function isSetupError(error) {
   return error?.response?.status === 503 && Boolean(error?.response?.data?.hint)
 }
 
+function isApiUnavailable(error) {
+  const status = error?.response?.status
+  return (
+    status === 502 ||
+    status === 504 ||
+    error?.code === 'ECONNABORTED' ||
+    error?.code === 'ERR_NETWORK' ||
+    error?.message === 'Network Error'
+  )
+}
+
 export function getPipelineErrorMeta(error) {
   if (!error) return null
   if (isSetupError(error)) {
@@ -12,6 +23,13 @@ export function getPipelineErrorMeta(error) {
       type: 'setup',
       message: error.response.data.error || 'Pipeline monitor is not configured',
       hint: error.response.data.hint,
+    }
+  }
+  if (isApiUnavailable(error)) {
+    return {
+      type: 'unavailable',
+      message: 'The status service is temporarily unavailable',
+      hint: 'Start the API with npm run api:dev (port 3001), then refresh. If it just restarted, wait a moment and try again.',
     }
   }
   return {
@@ -50,7 +68,7 @@ export function usePipelineStatus() {
       const { data } = await api.get('/pipelines/status')
       return data
     },
-    { retry: 1, staleTime: 60_000, refetchInterval: 60_000 }
+    { retry: 2, retryDelay: 1500, staleTime: 60_000, refetchInterval: 60_000 }
   )
 }
 
