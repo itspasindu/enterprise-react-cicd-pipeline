@@ -36,6 +36,7 @@ tmp/
 
 # Vite
 vite.svg
+!public/vite.svg
 
 # Package manager and tool caches
 .npm/
