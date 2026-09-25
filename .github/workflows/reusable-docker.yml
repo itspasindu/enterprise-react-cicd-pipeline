@@ -85,6 +85,7 @@ jobs:
           tags: ${{ steps.meta.outputs.web_tags }}
           cache-from: type=gha,scope=platform-web
           cache-to: type=gha,mode=max,scope=platform-web
+          no-cache-filter: runtime
           labels: |
             org.opencontainers.image.title=${{ inputs.release-prefix }}-web
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}

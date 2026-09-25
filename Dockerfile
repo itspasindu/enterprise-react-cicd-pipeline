@@ -1,10 +1,12 @@
 # Runtime image for the CI-built Vite dist (build-once).
 # Non-root nginx (port 8080) so deploy can use --cap-drop ALL + --read-only.
 # Local: npm run build && docker build -t platform:local .
-FROM nginxinc/nginx-unprivileged:1.30.4-alpine
+FROM nginxinc/nginx-unprivileged:1.30.4-alpine AS runtime
 
 USER root
-RUN apk upgrade --no-cache
+# Keep OS packages current for Trivy HIGH/CRITICAL gates (e.g. libexpat CVE-2026-93990).
+RUN apk upgrade --no-cache \
+  && apk add --no-cache --upgrade libexpat
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY dist/ /usr/share/nginx/html/
 USER 101
