@@ -117,6 +117,7 @@ The VM does not need outbound access to GHCR.
 - `no-new-privileges`
 - CPU and memory limits
 - PostgreSQL only on an internal Docker network
+- API attached to an `egress` network so it can call the GitHub API for the live pipeline monitor
 - only web port `4173` exposed
 
 ## Database migration and rollback policy

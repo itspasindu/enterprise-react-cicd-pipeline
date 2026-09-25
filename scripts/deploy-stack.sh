@@ -121,6 +121,10 @@ GITHUB_REPO=${GITHUB_REPO:-}
 EOF
 chmod 600 "$NEXT_ENV"
 
+if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_OWNER:-}" ] || [ -z "${GITHUB_REPO:-}" ]; then
+  echo "WARNING: GITHUB_TOKEN/OWNER/REPO incomplete — /api/pipelines/* (except status) will return 503" >&2
+fi
+
 echo "Starting PostgreSQL..."
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d postgres --wait
 

@@ -23,10 +23,20 @@ function PipelineOverview() {
       </Helmet>
 
       <div className="space-y-6" data-testid={TEST_IDS.pipelinePage}>
-        {!configured ? (
+        {!configured && !statusQuery.isLoading ? (
           <p className="text-sm text-slate-600">
             Connect the API to GitHub to load live build and release results here.
+            {statusQuery.data?.hint ? ` ${statusQuery.data.hint}` : ''}
           </p>
+        ) : null}
+
+        {statusQuery.isError ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            <p className="font-semibold">The status service is temporarily unavailable</p>
+            <p className="mt-1 text-rose-700/90">
+              Start the API with npm run api:dev (port 3001), then refresh.
+            </p>
+          </div>
         ) : null}
 
         {errorMeta?.type === 'error' || errorMeta?.type === 'unavailable' ? (

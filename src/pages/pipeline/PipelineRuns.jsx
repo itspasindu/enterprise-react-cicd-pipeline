@@ -4,7 +4,7 @@ import { Helmet } from 'react-helmet-async'
 import SetupBanner from '@components/pipeline/SetupBanner'
 import StatusBadge from '@components/pipeline/StatusBadge'
 import LoadingSpinner from '@components/LoadingSpinner'
-import { getPipelineErrorMeta, usePipelineRuns } from '@hooks/usePipelines'
+import { getPipelineErrorMeta, usePipelineRuns, usePipelineStatus } from '@hooks/usePipelines'
 import { PAGE_TITLES, TEST_IDS, pipelineRunPath } from '../../config/app-contract'
 
 function formatWhen(iso) {
@@ -14,7 +14,12 @@ function formatWhen(iso) {
 
 function PipelineRuns() {
   const [workflow, setWorkflow] = useState('')
-  const { data, isLoading, error } = usePipelineRuns({ workflow: workflow || undefined })
+  const statusQuery = usePipelineStatus()
+  const configured = statusQuery.data?.configured === true
+  const { data, isLoading, error } = usePipelineRuns({
+    workflow: workflow || undefined,
+    enabled: configured,
+  })
   const errorMeta = getPipelineErrorMeta(error)
 
   return (
@@ -24,6 +29,13 @@ function PipelineRuns() {
       </Helmet>
 
       <div className="space-y-4" data-testid={TEST_IDS.pipelineRunsPage}>
+        {!configured && !statusQuery.isLoading ? (
+          <SetupBanner
+            message="Pipeline monitor is not configured"
+            hint={statusQuery.data?.hint}
+          />
+        ) : null}
+
         {errorMeta?.type === 'setup' ? (
           <SetupBanner message={errorMeta.message} hint={errorMeta.hint} />
         ) : null}

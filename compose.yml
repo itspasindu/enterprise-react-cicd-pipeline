@@ -48,7 +48,9 @@ services:
       retries: 10
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-    networks: [backend]
+    # backend: talk to Postgres. egress: HTTPS to api.github.com for the live
+    # pipeline monitor (backend is internal:true and has no outbound path).
+    networks: [backend, egress]
     deploy:
       resources:
         limits:
@@ -88,6 +90,7 @@ networks:
   frontend:
   backend:
     internal: true
+  egress:
 
 volumes:
   postgres-data:

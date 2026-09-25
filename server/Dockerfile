@@ -6,9 +6,11 @@ RUN npm ci --omit=dev
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
+ARG CACHE_BUST=manual
 # Strip package managers from the runtime image (CI asserts these are absent).
-RUN apk upgrade --no-cache \
-  && apk add --no-cache --upgrade libexpat \
+RUN echo "cache-bust=${CACHE_BUST}" \
+  && apk upgrade --no-cache \
+  && apk add --no-cache --upgrade 'libexpat>=2.8.5-r0' \
   && rm -rf \
     /usr/local/lib/node_modules/npm \
     /usr/local/lib/node_modules/corepack \

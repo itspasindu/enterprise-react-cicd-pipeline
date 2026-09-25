@@ -2,7 +2,12 @@ import { Link } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
 import SetupBanner from '@components/pipeline/SetupBanner'
 import LoadingSpinner from '@components/LoadingSpinner'
-import { getPipelineErrorMeta, usePipelineOverview, useRecentArtifacts } from '@hooks/usePipelines'
+import {
+  getPipelineErrorMeta,
+  usePipelineOverview,
+  usePipelineStatus,
+  useRecentArtifacts,
+} from '@hooks/usePipelines'
 import { PAGE_TITLES, TEST_IDS, pipelineRunPath } from '../../config/app-contract'
 
 function formatBytes(bytes) {
@@ -24,10 +29,13 @@ function friendlyArtifactName(name) {
 }
 
 function PipelineArtifacts() {
-  const overview = usePipelineOverview()
+  const statusQuery = usePipelineStatus()
+  const configured = statusQuery.data?.configured === true
+  const overview = usePipelineOverview({ enabled: configured })
   const artifactsQuery = useRecentArtifacts(overview.data?.recentRuns || [])
   const errorMeta = getPipelineErrorMeta(overview.error || artifactsQuery.error)
-  const isLoading = overview.isLoading || artifactsQuery.isLoading
+  const isLoading =
+    statusQuery.isLoading || (configured && (overview.isLoading || artifactsQuery.isLoading))
 
   return (
     <>
@@ -36,6 +44,13 @@ function PipelineArtifacts() {
       </Helmet>
 
       <div className="space-y-4" data-testid={TEST_IDS.pipelineArtifactsPage}>
+        {!configured && !statusQuery.isLoading ? (
+          <SetupBanner
+            message="Pipeline monitor is not configured"
+            hint={statusQuery.data?.hint}
+          />
+        ) : null}
+
         {errorMeta?.type === 'setup' ? (
           <SetupBanner message={errorMeta.message} hint={errorMeta.hint} />
         ) : null}

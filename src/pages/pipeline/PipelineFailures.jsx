@@ -1,7 +1,7 @@
 import { Helmet } from 'react-helmet-async'
 import SetupBanner from '@components/pipeline/SetupBanner'
 import LoadingSpinner from '@components/LoadingSpinner'
-import { getPipelineErrorMeta, usePipelineFailures } from '@hooks/usePipelines'
+import { getPipelineErrorMeta, usePipelineFailures, usePipelineStatus } from '@hooks/usePipelines'
 import { PAGE_TITLES, TEST_IDS } from '../../config/app-contract'
 
 function timeAgo(iso) {
@@ -14,7 +14,9 @@ function timeAgo(iso) {
 }
 
 function PipelineFailures() {
-  const { data, isLoading, error } = usePipelineFailures()
+  const statusQuery = usePipelineStatus()
+  const configured = statusQuery.data?.configured === true
+  const { data, isLoading, error } = usePipelineFailures({ enabled: configured })
   const errorMeta = getPipelineErrorMeta(error)
 
   return (
@@ -24,6 +26,13 @@ function PipelineFailures() {
       </Helmet>
 
       <div className="space-y-4" data-testid={TEST_IDS.pipelineFailuresPage}>
+        {!configured && !statusQuery.isLoading ? (
+          <SetupBanner
+            message="Pipeline monitor is not configured"
+            hint={statusQuery.data?.hint}
+          />
+        ) : null}
+
         {errorMeta?.type === 'setup' ? (
           <SetupBanner message={errorMeta.message} hint={errorMeta.hint} />
         ) : null}

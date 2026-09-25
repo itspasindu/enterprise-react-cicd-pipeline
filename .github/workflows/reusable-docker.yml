@@ -86,6 +86,8 @@ jobs:
           cache-from: type=gha,scope=platform-web
           cache-to: type=gha,mode=max,scope=platform-web
           no-cache-filter: runtime
+          build-args: |
+            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
           labels: |
             org.opencontainers.image.title=${{ inputs.release-prefix }}-web
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
@@ -102,6 +104,8 @@ jobs:
           cache-from: type=gha,scope=platform-api
           cache-to: type=gha,mode=max,scope=platform-api
           no-cache-filter: runtime
+          build-args: |
+            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
           labels: |
             org.opencontainers.image.title=${{ inputs.release-prefix }}-api
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
@@ -122,6 +126,29 @@ jobs:
             if command -v yarn >/dev/null 2>&1; then echo "yarn must not exist" >&2; exit 1; fi
             if command -v corepack >/dev/null 2>&1; then echo "corepack must not exist" >&2; exit 1; fi
           '
+
+      - name: Confirm patched OS packages in images
+        env:
+          WEB_IMAGE: ${{ steps.meta.outputs.web_image }}:${{ steps.meta.outputs.version }}
+          API_IMAGE: ${{ steps.meta.outputs.api_image }}:${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "::group::web libexpat"
+          docker run --rm --user root --entrypoint sh "$WEB_IMAGE" -ec '
+            apk info -v libexpat
+            apk policy libexpat
+            apk info -v libexpat | grep -E "^libexpat-2\.(8\.[5-9]|9\.|[1-9][0-9]+\.)"
+          '
+          echo "::endgroup::"
+          echo "::group::api libexpat"
+          docker run --rm --user root --entrypoint sh "$API_IMAGE" -ec '
+            apk info -v libexpat || echo "libexpat not installed (ok if unused)"
+            if apk info -e libexpat >/dev/null 2>&1; then
+              apk policy libexpat
+              apk info -v libexpat | grep -E "^libexpat-2\.(8\.[5-9]|9\.|[1-9][0-9]+\.)"
+            fi
+          '
+          echo "::endgroup::"
 
       - name: Scan web image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -150,6 +177,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.web_tags }}
           cache-from: type=gha,scope=platform-web
+          no-cache-filter: runtime
+          build-args: |
+            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
           labels: |
             org.opencontainers.image.title=${{ inputs.release-prefix }}-web
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
@@ -164,6 +194,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.api_tags }}
           cache-from: type=gha,scope=platform-api
+          no-cache-filter: runtime
+          build-args: |
+            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
           labels: |
             org.opencontainers.image.title=${{ inputs.release-prefix }}-api
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}

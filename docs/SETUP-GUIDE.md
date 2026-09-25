@@ -93,7 +93,7 @@ Add:
 | `STAGING_SSH_KNOWN_HOSTS` | verified `ssh-keyscan` output |
 | `POSTGRES_PASSWORD` | strong database password |
 | `TAILSCALE_AUTHKEY` | optional reusable/ephemeral auth key |
-| `PIPELINE_GITHUB_TOKEN` | fine-grained token that can read this repo's Actions. CD writes it to the API as `GITHUB_TOKEN`. The built-in Actions token expires when the job ends, so it cannot drive the live status page. |
+| `PIPELINE_GITHUB_TOKEN` | fine-grained token that can read this repo's Actions (`actions:read`, ideally `issues:read`). CD writes it to the API as `GITHUB_TOKEN`. The built-in Actions token expires when the job ends, so it cannot drive the live status page. **Required** for `/api/pipelines/overview` on staging — without it the page returns 503. |
 
 Generate host keys from a trusted network path:
 
@@ -148,6 +148,7 @@ Enable Wikis, create the first page once, and add repository secret `WIKI_TOKEN`
 | Database authentication failure | staging `POSTGRES_PASSWORD`; existing volume retains original DB credentials |
 | Password changed after first deploy | update the role inside PostgreSQL or recreate the volume only if data can be deleted |
 | Web returns 502 | API health and Compose backend network |
+| Pipeline page 503 / overview fails on VM | (1) staging secret `PIPELINE_GITHUB_TOKEN` must be set; (2) API must be on the `egress` network in `compose.yml` — the internal `backend` network cannot reach `api.github.com`. Check `curl -s http://127.0.0.1:4173/api/pipelines/status` on the VM (`configured` should be `true`) and `docker compose ... logs api` |
 | Contact form fails | `/api/contacts` response and API logs |
 | Image unavailable | CI release job and digest in `release-metadata.json` |
 | SSH host key failure | refresh and independently verify `STAGING_SSH_KNOWN_HOSTS` |

@@ -89,7 +89,7 @@ export function usePipelineOverview({ enabled = true } = {}) {
   )
 }
 
-export function usePipelineRuns({ workflow, page = 1 } = {}) {
+export function usePipelineRuns({ workflow, page = 1, enabled = true } = {}) {
   return useQuery(
     ['pipelines', 'runs', workflow || 'all', page],
     async () => {
@@ -99,6 +99,7 @@ export function usePipelineRuns({ workflow, page = 1 } = {}) {
       return data
     },
     {
+      enabled,
       retry: false,
       staleTime: 10_000,
       keepPreviousData: true,
@@ -134,14 +135,14 @@ export function usePipelineArtifacts(runId) {
   )
 }
 
-export function usePipelineFailures() {
+export function usePipelineFailures({ enabled = true } = {}) {
   return useQuery(
     ['pipelines', 'failures'],
     async () => {
       const { data } = await api.get('/pipelines/failures')
       return data
     },
-    { retry: false, staleTime: 30_000, refetchInterval: 60_000 }
+    { enabled, retry: false, staleTime: 30_000, refetchInterval: 60_000 }
   )
 }
 
