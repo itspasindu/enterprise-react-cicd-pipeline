@@ -8,6 +8,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 # Strip package managers from the runtime image (CI asserts these are absent).
 RUN apk upgrade --no-cache \
+  && apk add --no-cache --upgrade libexpat \
   && rm -rf \
     /usr/local/lib/node_modules/npm \
     /usr/local/lib/node_modules/corepack \
