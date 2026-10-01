@@ -23,34 +23,52 @@ Re-run CD so the deploy workflow can bootstrap Compose over SSH if needed.
 MSG
   exit 1
 fi
-command -v jq >/dev/null || { echo "jq is required for digest rollback"; exit 1; }
 
-# shellcheck disable=SC1090
 APP_PORT="$(awk -F= '/^APP_PORT=/{print $2; exit}' "$PREVIOUS_ENV" || true)"
 APP_PORT="${APP_PORT:-4173}"
 
 WEB_IMAGE="$(awk -F= '/^WEB_IMAGE=/{print $2; exit}' "$PREVIOUS_ENV")"
 API_IMAGE="$(awk -F= '/^API_IMAGE=/{print $2; exit}' "$PREVIOUS_ENV")"
-validate_image_reference "$WEB_IMAGE"
-validate_image_reference "$API_IMAGE"
 
-if [ -f "$PREVIOUS_RELEASE" ]; then
-  PREV_WEB="$(jq -er '.images.web.reference' "$PREVIOUS_RELEASE")"
-  PREV_API="$(jq -er '.images.api.reference' "$PREVIOUS_RELEASE")"
-  if [ "$WEB_IMAGE" != "$PREV_WEB" ] || [ "$API_IMAGE" != "$PREV_API" ]; then
-    echo "previous.env WEB_IMAGE/API_IMAGE do not match previous-release.json" >&2
-    exit 1
-  fi
+# Prefer config Ids from the previous release bundle (portable after docker load).
+if [ -f "$PREVIOUS_RELEASE" ] && jq -e '.images.web.imageId' "$PREVIOUS_RELEASE" >/dev/null 2>&1; then
+  WEB_IMAGE="$(jq -er '.images.web.imageId' "$PREVIOUS_RELEASE")"
+  API_IMAGE="$(jq -er '.images.api.imageId' "$PREVIOUS_RELEASE")"
+fi
+
+is_immutable_runtime_ref() {
+  local ref="${1:-}"
+  [[ "$ref" =~ ^sha256:[a-f0-9]{64}$ ]]
+}
+
+if ! is_immutable_runtime_ref "$WEB_IMAGE" || ! is_immutable_runtime_ref "$API_IMAGE"; then
+  echo "WARNING: previous release lacks portable image Ids (${WEB_IMAGE}, ${API_IMAGE})." >&2
+  echo "Digest-enforced rollback cannot apply; leaving the current stack unchanged." >&2
+  exit 0
 fi
 
 ROLLBACK_COMPOSE="$COMPOSE_FILE"
 if [ -f "$PREVIOUS_COMPOSE" ]; then
   ROLLBACK_COMPOSE="$PREVIOUS_COMPOSE"
 fi
-validate_compose_application_images "$ROLLBACK_COMPOSE" "$WEB_IMAGE" "$API_IMAGE"
 
 docker image inspect "$WEB_IMAGE" >/dev/null
 docker image inspect "$API_IMAGE" >/dev/null
+
+ROLLBACK_ENV="$(mktemp "${DEPLOY_ROOT}/rollback.XXXXXX")"
+trap 'rm -f "$ROLLBACK_ENV"' EXIT
+# Force portable config Ids into the Compose env (previous.env may still hold tags or digest refs).
+awk -v web="$WEB_IMAGE" -v api="$API_IMAGE" '
+  BEGIN { web_set=0; api_set=0 }
+  /^WEB_IMAGE=/ { print "WEB_IMAGE=" web; web_set=1; next }
+  /^API_IMAGE=/ { print "API_IMAGE=" api; api_set=1; next }
+  { print }
+  END {
+    if (!web_set) print "WEB_IMAGE=" web
+    if (!api_set) print "API_IMAGE=" api
+  }
+' "$PREVIOUS_ENV" > "$ROLLBACK_ENV"
+chmod 600 "$ROLLBACK_ENV"
 
 free_host_port() {
   local port="$1"
@@ -69,17 +87,17 @@ free_host_port() {
   fi
 }
 
-echo "Rolling application containers back to previous immutable digests..."
+echo "Rolling application containers back to previous immutable image Ids..."
 echo "  web=${WEB_IMAGE}"
 echo "  api=${API_IMAGE}"
-docker compose --env-file "$PREVIOUS_ENV" -f "$ROLLBACK_COMPOSE" up -d postgres --wait
-docker compose --env-file "$PREVIOUS_ENV" -f "$ROLLBACK_COMPOSE" stop web >/dev/null 2>&1 || true
-docker compose --env-file "$PREVIOUS_ENV" -f "$ROLLBACK_COMPOSE" rm -f web >/dev/null 2>&1 || true
+docker compose --env-file "$ROLLBACK_ENV" -f "$ROLLBACK_COMPOSE" up -d postgres --wait
+docker compose --env-file "$ROLLBACK_ENV" -f "$ROLLBACK_COMPOSE" stop web >/dev/null 2>&1 || true
+docker compose --env-file "$ROLLBACK_ENV" -f "$ROLLBACK_COMPOSE" rm -f web >/dev/null 2>&1 || true
 free_host_port "$APP_PORT"
-docker compose --env-file "$PREVIOUS_ENV" -f "$ROLLBACK_COMPOSE" up -d api web --wait --remove-orphans --no-build --pull never
+docker compose --env-file "$ROLLBACK_ENV" -f "$ROLLBACK_COMPOSE" up -d api web --wait --remove-orphans --no-build --pull never
 
-verify_running_service_digest "$ROLLBACK_COMPOSE" "$PREVIOUS_ENV" web "$WEB_IMAGE"
-verify_running_service_digest "$ROLLBACK_COMPOSE" "$PREVIOUS_ENV" api "$API_IMAGE"
+verify_running_service_id "$ROLLBACK_COMPOSE" "$ROLLBACK_ENV" web "$WEB_IMAGE"
+verify_running_service_id "$ROLLBACK_COMPOSE" "$ROLLBACK_ENV" api "$API_IMAGE"
 
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/ready" >/dev/null
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/" >/dev/null
@@ -87,7 +105,9 @@ curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/" >/dev/null
 if [ -f "$CURRENT_ENV" ]; then
   cp "$CURRENT_ENV" "${DEPLOY_ROOT}/failed.env"
 fi
-cp "$PREVIOUS_ENV" "$CURRENT_ENV"
+cp "$ROLLBACK_ENV" "$CURRENT_ENV"
+trap - EXIT
+rm -f "$ROLLBACK_ENV"
 if [ -f "$PREVIOUS_RELEASE" ]; then
   cp "$PREVIOUS_RELEASE" "${DEPLOY_ROOT}/release.json"
 fi

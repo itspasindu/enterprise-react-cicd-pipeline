@@ -212,6 +212,7 @@ jobs:
           {
             echo "digest=${DIGEST}"
             echo "digest_ref=${DIGEST_REF}"
+            echo "image_id=${LOCAL_ID}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Push verified API image
@@ -251,6 +252,7 @@ jobs:
           {
             echo "digest=${DIGEST}"
             echo "digest_ref=${DIGEST_REF}"
+            echo "image_id=${LOCAL_ID}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Set immutable references
@@ -258,6 +260,8 @@ jobs:
         run: |
           echo "web_digest_ref=${{ steps.web_push.outputs.digest_ref }}" >> "$GITHUB_OUTPUT"
           echo "api_digest_ref=${{ steps.api_push.outputs.digest_ref }}" >> "$GITHUB_OUTPUT"
+          echo "web_image_id=${{ steps.web_push.outputs.image_id }}" >> "$GITHUB_OUTPUT"
+          echo "api_image_id=${{ steps.api_push.outputs.image_id }}" >> "$GITHUB_OUTPUT"
 
       - name: Generate web SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
@@ -294,6 +298,8 @@ jobs:
           API_DIGEST_REF: ${{ steps.refs.outputs.api_digest_ref }}
           WEB_IMAGE_NAME: ${{ steps.meta.outputs.web_image }}
           API_IMAGE_NAME: ${{ steps.meta.outputs.api_image }}
+          WEB_IMAGE_ID: ${{ steps.refs.outputs.web_image_id }}
+          API_IMAGE_ID: ${{ steps.refs.outputs.api_image_id }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
@@ -304,7 +310,18 @@ jobs:
           # Fail if this CalVer tag was somehow already published as a bundle identity collision.
           test -f release/release.json
           test -f release/checksums.txt
-          jq -e --arg v "$VERSION" '.version == $v and (.commit | length == 40)' release/release.json >/dev/null
+          jq -e --arg v "$VERSION" \
+            --arg wid "$WEB_IMAGE_ID" \
+            --arg aid "$API_IMAGE_ID" \
+            '.version == $v
+             and (.commit | length == 40)
+             and .images.web.imageId == $wid
+             and .images.api.imageId == $aid
+             and (.images.web.reference | test("@sha256:[a-f0-9]{64}$"))
+             and (.images.api.reference | test("@sha256:[a-f0-9]{64}$"))' \
+            release/release.json >/dev/null
+          grep -q 'image: ${WEB_IMAGE}' release/compose.yml
+          grep -q 'image: ${API_IMAGE}' release/compose.yml
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-bundle

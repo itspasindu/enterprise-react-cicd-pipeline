@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Assemble an immutable release/ directory for CD.
 # Required env: VERSION WEB_DIGEST_REF API_DIGEST_REF WEB_IMAGE_NAME API_IMAGE_NAME
-#               GITHUB_SHA GITHUB_REPOSITORY
+#               WEB_IMAGE_ID API_IMAGE_ID GITHUB_SHA GITHUB_REPOSITORY
 # Optional: GITHUB_RUN_ID GITHUB_RUN_ATTEMPT ROOT OUT
 set -euo pipefail
 
@@ -14,6 +14,8 @@ OUT="${OUT:-${ROOT}/release}"
 : "${API_DIGEST_REF:?API_DIGEST_REF is required}"
 : "${WEB_IMAGE_NAME:?WEB_IMAGE_NAME is required}"
 : "${API_IMAGE_NAME:?API_IMAGE_NAME is required}"
+: "${WEB_IMAGE_ID:?WEB_IMAGE_ID is required}"
+: "${API_IMAGE_ID:?API_IMAGE_ID is required}"
 : "${GITHUB_SHA:?GITHUB_SHA is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 
@@ -22,6 +24,8 @@ source "${SCRIPT_DIR}/lib/validate-image-ref.sh"
 
 validate_image_reference "$WEB_DIGEST_REF"
 validate_image_reference "$API_DIGEST_REF"
+validate_image_id "$WEB_IMAGE_ID"
+validate_image_id "$API_IMAGE_ID"
 
 if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "GITHUB_SHA must be the full 40-character commit SHA, got: ${GITHUB_SHA}" >&2
@@ -37,14 +41,15 @@ CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 rm -rf "$OUT"
 mkdir -p "${OUT}/lib"
 
-# Pin api/web to immutable GHCR digest refs; drop build: (VM has no source tree).
-python3 - "$ROOT/compose.yml" "$OUT/compose.yml" "$WEB_DIGEST_REF" "$API_DIGEST_REF" <<'PY'
+# Keep ${WEB_IMAGE}/${API_IMAGE} placeholders: digest refs do not survive docker save/load
+# on typical staging daemons. Deploy injects imageId (config digest) at runtime.
+python3 - "$ROOT/compose.yml" "$OUT/compose.yml" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-src, dest, web_img, api_img = sys.argv[1:5]
-images = {"web": web_img, "api": api_img}
+src, dest = sys.argv[1:3]
+images = {"web": "${WEB_IMAGE}", "api": "${API_IMAGE}"}
 out = []
 service = None
 skip_build = False
@@ -112,6 +117,8 @@ jq -n \
   --arg apiDigest "$API_DIGEST" \
   --arg webRef "$WEB_DIGEST_REF" \
   --arg apiRef "$API_DIGEST_REF" \
+  --arg webId "$WEB_IMAGE_ID" \
+  --arg apiId "$API_IMAGE_ID" \
   '{
     schemaVersion: $schemaVersion,
     repository: $repository,
@@ -121,8 +128,8 @@ jq -n \
     workflowRunId: $workflowRunId,
     workflowRunAttempt: $workflowRunAttempt,
     images: {
-      web: { tag: $webPublishTag, digest: $webDigest, reference: $webRef },
-      api: { tag: $apiPublishTag, digest: $apiDigest, reference: $apiRef }
+      web: { tag: $webPublishTag, digest: $webDigest, reference: $webRef, imageId: $webId },
+      api: { tag: $apiPublishTag, digest: $apiDigest, reference: $apiRef, imageId: $apiId }
     }
   }' > "${OUT}/release.json"
 
@@ -130,7 +137,9 @@ jq '{
   version: .version,
   sha: .commit,
   webImage: .images.web.reference,
-  apiImage: .images.api.reference
+  apiImage: .images.api.reference,
+  webImageId: .images.web.imageId,
+  apiImageId: .images.api.imageId
 }' "${OUT}/release.json" > "${OUT}/release-metadata.json"
 
 (
@@ -139,7 +148,7 @@ jq '{
   find . -type f ! -name checksums.txt -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 ) > "${OUT}/checksums.txt"
 
-validate_compose_application_images "${OUT}/compose.yml" "$WEB_DIGEST_REF" "$API_DIGEST_REF"
+validate_release_compose_placeholders "${OUT}/compose.yml"
 
 echo "Immutable release bundle written to ${OUT}"
-jq '{version, commit, images: {web: .images.web, api: .images.api}}' "${OUT}/release.json"
+jq '{version, commit, images}' "${OUT}/release.json"

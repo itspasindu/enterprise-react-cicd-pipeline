@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Copy the immutable release bundle and both app images to the staging VM.
-# Images are transferred by digest reference (name@sha256:...); never mutable tags.
+# Runner pulls/saves by name@sha256 (manifest). After docker load on the VM,
+# images are addressed by imageId (config digest) because RepoDigests are not
+# reliably restored offline.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,19 +46,31 @@ fi
 
 EXPECTED_WEB="$(jq -er '.images.web.reference' "${RELEASE_DIR}/release.json")"
 EXPECTED_API="$(jq -er '.images.api.reference' "${RELEASE_DIR}/release.json")"
+EXPECTED_WEB_ID="$(jq -er '.images.web.imageId' "${RELEASE_DIR}/release.json")"
+EXPECTED_API_ID="$(jq -er '.images.api.imageId' "${RELEASE_DIR}/release.json")"
 EXPECTED_VERSION="$(jq -er '.version' "${RELEASE_DIR}/release.json")"
+validate_image_id "$EXPECTED_WEB_ID"
+validate_image_id "$EXPECTED_API_ID"
+validate_release_compose_placeholders "${RELEASE_DIR}/compose.yml"
+
 if [ "$VERSION" != "$EXPECTED_VERSION" ]; then
   echo "VERSION (${VERSION}) does not match release.json (${EXPECTED_VERSION})" >&2
   exit 1
 fi
 if [ "$WEB_IMAGE" != "$EXPECTED_WEB" ] || [ "$API_IMAGE" != "$EXPECTED_API" ]; then
   echo "Transfer refs must match release.json references" >&2
-  echo "  expected web=${EXPECTED_WEB} api=${EXPECTED_API}" >&2
-  echo "  got      web=${WEB_IMAGE} api=${API_IMAGE}" >&2
   exit 1
 fi
 
-validate_compose_application_images "${RELEASE_DIR}/compose.yml" "$EXPECTED_WEB" "$EXPECTED_API"
+# Prove runner images match the recorded config Ids before save.
+WEB_ID="$(docker image inspect --format='{{.Id}}' "$WEB_IMAGE")"
+API_ID="$(docker image inspect --format='{{.Id}}' "$API_IMAGE")"
+if [ "$WEB_ID" != "$EXPECTED_WEB_ID" ] || [ "$API_ID" != "$EXPECTED_API_ID" ]; then
+  echo "Runner image Ids do not match release.json imageId values" >&2
+  echo "  web got=${WEB_ID} want=${EXPECTED_WEB_ID}" >&2
+  echo "  api got=${API_ID} want=${EXPECTED_API_ID}" >&2
+  exit 1
+fi
 
 known_hosts="${HOME}/.ssh/known_hosts"
 if [ ! -f "$known_hosts" ]; then
@@ -69,9 +83,6 @@ SCP=(scp -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=${known_hosts}")
 REMOTE="${USER}@${HOST}"
 RSYNC_RSH="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${known_hosts}"
 
-docker image inspect "$WEB_IMAGE" >/dev/null
-docker image inspect "$API_IMAGE" >/dev/null
-
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
@@ -83,12 +94,6 @@ save_checked_archive() {
   if [ ! -s "$dest" ]; then
     echo "Refusing to transfer empty archive for ${ref}" >&2
     exit 1
-  fi
-  if [[ "$ref" != *@sha256:* ]]; then
-    if ! image_archive_contains_ref "$dest" "$ref"; then
-      echo "Refusing to transfer ${ref}: docker save did not record that tag." >&2
-      exit 1
-    fi
   fi
   gzip -f "$dest"
 }
@@ -110,26 +115,49 @@ remote_dir="${DEPLOY_ROOT}/.image-transfer"
 "${SCP[@]}" "${workdir}/web.tar.gz" "${workdir}/api.tar.gz" "${REMOTE}:${remote_dir}/"
 
 "${SSH[@]}" "$REMOTE" \
-  "REMOTE_DIR='${remote_dir}' WEB_IMAGE='${WEB_IMAGE}' API_IMAGE='${API_IMAGE}' bash -s" <<'EOF'
+  "REMOTE_DIR='${remote_dir}' WEB_REF='${WEB_IMAGE}' API_REF='${API_IMAGE}' WEB_ID='${EXPECTED_WEB_ID}' API_ID='${EXPECTED_API_ID}' bash -s" <<'EOF'
 set -euo pipefail
 trap 'rm -rf "$REMOTE_DIR"' EXIT
+
 load_one() {
   local archive="$1"
-  local ref="$2"
+  local digest_ref="$2"
+  local expected_id="$3"
   local plain="${archive%.gz}"
-  echo "Loading ${archive} for ${ref}"
+  local load_out="" loaded_id=""
+
+  echo "Loading ${archive} for ${digest_ref} (expect Id ${expected_id})"
   gzip -dc "$archive" > "$plain"
-  docker load -i "$plain"
-  if ! docker image inspect "$ref" >/dev/null 2>&1; then
-    echo "VM is missing ${ref} after docker load." >&2
+  load_out="$(docker load -i "$plain")"
+  printf '%s\n' "$load_out"
+
+  if docker image inspect "$digest_ref" >/dev/null 2>&1; then
+    loaded_id="$(docker image inspect --format='{{.Id}}' "$digest_ref")"
+  elif printf '%s\n' "$load_out" | grep -q 'Loaded image ID:'; then
+    loaded_id="$(printf '%s\n' "$load_out" | sed -n 's/.*Loaded image ID: //p' | head -1 | tr -d '[:space:]')"
+  elif printf '%s\n' "$load_out" | grep -q 'Loaded image:'; then
+    loaded_id="$(docker image inspect --format='{{.Id}}' "$(printf '%s\n' "$load_out" | sed -n 's/.*Loaded image: //p' | head -1 | tr -d '[:space:]')")"
+  else
+    echo "Could not determine loaded image Id from docker load output" >&2
     docker images >&2 || true
     exit 1
   fi
+
+  if [ "$loaded_id" != "$expected_id" ]; then
+    echo "Loaded image Id mismatch for ${digest_ref}" >&2
+    echo "  got=${loaded_id}" >&2
+    echo "  want=${expected_id}" >&2
+    exit 1
+  fi
+
+  # Ensure the config Id is directly inspectable for Compose.
+  docker image inspect "$expected_id" >/dev/null
   rm -f "$archive" "$plain"
+  echo "Loaded ${digest_ref} as ${expected_id}"
 }
-load_one "${REMOTE_DIR}/web.tar.gz" "$WEB_IMAGE"
-load_one "${REMOTE_DIR}/api.tar.gz" "$API_IMAGE"
-echo "Loaded ${WEB_IMAGE} and ${API_IMAGE}"
+
+load_one "${REMOTE_DIR}/web.tar.gz" "$WEB_REF" "$WEB_ID"
+load_one "${REMOTE_DIR}/api.tar.gz" "$API_REF" "$API_ID"
 EOF
 
 remote_web_ref="$("${SSH[@]}" "$REMOTE" "jq -er '.images.web.reference' '${DEPLOY_ROOT}/release.json'")"
@@ -140,5 +168,5 @@ if [ "$remote_web_ref" != "$EXPECTED_WEB" ] || [ "$remote_api_ref" != "$EXPECTED
 fi
 
 echo "Staged immutable release ${VERSION}"
-echo "  web=${WEB_IMAGE}"
-echo "  api=${API_IMAGE}"
+echo "  web=${WEB_IMAGE} (Id ${EXPECTED_WEB_ID})"
+echo "  api=${API_IMAGE} (Id ${EXPECTED_API_ID})"
