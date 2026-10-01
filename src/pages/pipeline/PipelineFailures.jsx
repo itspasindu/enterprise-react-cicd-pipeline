@@ -27,10 +27,7 @@ function PipelineFailures() {
 
       <div className="space-y-4" data-testid={TEST_IDS.pipelineFailuresPage}>
         {!configured && !statusQuery.isLoading ? (
-          <SetupBanner
-            message="Pipeline monitor is not configured"
-            hint={statusQuery.data?.hint}
-          />
+          <SetupBanner message="Pipeline monitor is not configured" hint={statusQuery.data?.hint} />
         ) : null}
 
         {errorMeta?.type === 'setup' ? (
