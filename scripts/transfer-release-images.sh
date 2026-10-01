@@ -88,9 +88,12 @@ trap 'rm -rf "$workdir"' EXIT
 
 save_checked_archive() {
   local ref="$1"
-  local dest="$2"
-  echo "Saving ${ref}"
-  docker save -o "$dest" "$ref"
+  local image_id="$2"
+  local dest="$3"
+  echo "Saving ${ref} by image Id ${image_id}"
+  # Save by config Id so offline load restores the same Id. Saving a
+  # name@sha256 manifest ref can rewrite the local Id on docker load.
+  docker save -o "$dest" "$image_id"
   if [ ! -s "$dest" ]; then
     echo "Refusing to transfer empty archive for ${ref}" >&2
     exit 1
@@ -98,8 +101,8 @@ save_checked_archive() {
   gzip -f "$dest"
 }
 
-save_checked_archive "$WEB_IMAGE" "${workdir}/web.tar"
-save_checked_archive "$API_IMAGE" "${workdir}/api.tar"
+save_checked_archive "$WEB_IMAGE" "$EXPECTED_WEB_ID" "${workdir}/web.tar"
+save_checked_archive "$API_IMAGE" "$EXPECTED_API_ID" "${workdir}/api.tar"
 ls -lh "${workdir}/web.tar.gz" "${workdir}/api.tar.gz"
 
 echo "Syncing immutable release bundle to ${DEPLOY_ROOT}"
@@ -131,8 +134,8 @@ load_one() {
   load_out="$(docker load -i "$plain")"
   printf '%s\n' "$load_out"
 
-  if docker image inspect "$digest_ref" >/dev/null 2>&1; then
-    loaded_id="$(docker image inspect --format='{{.Id}}' "$digest_ref")"
+  if docker image inspect "$expected_id" >/dev/null 2>&1; then
+    loaded_id="$expected_id"
   elif printf '%s\n' "$load_out" | grep -q 'Loaded image ID:'; then
     loaded_id="$(printf '%s\n' "$load_out" | sed -n 's/.*Loaded image ID: //p' | head -1 | tr -d '[:space:]')"
   elif printf '%s\n' "$load_out" | grep -q 'Loaded image:'; then
@@ -147,10 +150,11 @@ load_one() {
     echo "Loaded image Id mismatch for ${digest_ref}" >&2
     echo "  got=${loaded_id}" >&2
     echo "  want=${expected_id}" >&2
+    echo "  docker load output:" >&2
+    printf '%s\n' "$load_out" >&2
     exit 1
   fi
 
-  # Ensure the config Id is directly inspectable for Compose.
   docker image inspect "$expected_id" >/dev/null
   rm -f "$archive" "$plain"
   echo "Loaded ${digest_ref} as ${expected_id}"
