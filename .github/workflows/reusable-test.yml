@@ -3,6 +3,7 @@ name: Reusable Tests
 on:
   workflow_call:
 
+# All jobs only need checkout + Actions artifacts (no GitHub API writes).
 permissions:
   contents: read
 

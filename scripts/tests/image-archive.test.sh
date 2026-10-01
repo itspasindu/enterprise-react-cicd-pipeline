@@ -47,6 +47,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 web_ref="platform-web:staging-1-1"
 api_ref="platform-api:2026.09.1"
+web_digest="ghcr.io/acme/platform-web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+api_digest="ghcr.io/acme/platform-api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 make_tar "${tmp}/docker-web.tar" manifest.json \
   "[{\"Config\":\"abc\",\"RepoTags\":[\"${web_ref}\"],\"Layers\":[\"layer.tar\"]}]"
@@ -95,25 +97,43 @@ expect_transfer_failure() {
   fi
 }
 
-expect_transfer_failure "not a GHCR digest ref" \
+expect_transfer_failure "Mutable Docker image reference" \
   HOST=staging.example USER=deploy DEPLOY_ROOT=/opt/platform VERSION=2026.09.1 \
-  WEB_IMAGE='ghcr.io/acme/platform-web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-  API_IMAGE='platform-api:staging-1-1' \
-  LOCAL_WEB='platform-web:2026.09.1' \
-  LOCAL_API='platform-api:2026.09.1'
+  WEB_IMAGE='platform-web:2026.09.1' \
+  API_IMAGE="$api_digest" \
+  RELEASE_DIR="${tmp}/bad-release"
 
-expect_transfer_failure "must be a safe name:tag" \
+mkdir -p "${tmp}/bad-release"
+jq -n \
+  --arg v "2026.09.1" \
+  --arg w "$web_digest" \
+  --arg a "$api_digest" \
+  '{
+    version: $v,
+    images: {
+      web: { reference: $w },
+      api: { reference: $a }
+    }
+  }' > "${tmp}/bad-release/release.json"
+printf '%s\n' 'deadbeef  release.json' > "${tmp}/bad-release/checksums.txt"
+printf '%s\n' '  web:' '    image: '"$web_digest" '  api:' '    image: '"$api_digest" > "${tmp}/bad-release/compose.yml"
+
+expect_transfer_failure "Missing" \
   HOST=staging.example USER=deploy DEPLOY_ROOT=/opt/platform VERSION=2026.09.1 \
-  WEB_IMAGE='platform-web:staging-1-1' \
-  API_IMAGE='platform-api:staging-1-1' \
-  LOCAL_WEB='platform-web:2026.09.1' \
-  LOCAL_API='not a tag'
+  WEB_IMAGE="$web_digest" \
+  API_IMAGE="$api_digest" \
+  RELEASE_DIR="${tmp}/norelease"
+
+expect_transfer_failure "Mutable Docker image reference" \
+  HOST=staging.example USER=deploy DEPLOY_ROOT=/opt/platform VERSION=2026.09.1 \
+  WEB_IMAGE="$web_digest" \
+  API_IMAGE='not-a-digest-ref' \
+  RELEASE_DIR="${tmp}/bad-release"
 
 expect_transfer_failure "must be different" \
   HOST=staging.example USER=deploy DEPLOY_ROOT=/opt/platform VERSION=2026.09.1 \
-  WEB_IMAGE='platform-web:staging-1-1' \
-  API_IMAGE='platform-web:staging-1-1' \
-  LOCAL_WEB='platform-web:2026.09.1' \
-  LOCAL_API='platform-api:2026.09.1'
+  WEB_IMAGE="$web_digest" \
+  API_IMAGE="$web_digest" \
+  RELEASE_DIR="${tmp}/bad-release"
 
 echo "image-archive tests passed"

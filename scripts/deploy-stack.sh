@@ -3,13 +3,17 @@ set -euo pipefail
 
 DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/platform}"
 COMPOSE_FILE="${DEPLOY_ROOT}/compose.yml"
-METADATA_FILE="${DEPLOY_ROOT}/release-metadata.json"
+RELEASE_JSON="${DEPLOY_ROOT}/release.json"
 CURRENT_ENV="${DEPLOY_ROOT}/current.env"
 PREVIOUS_ENV="${DEPLOY_ROOT}/previous.env"
 POSTGRES_DB="${POSTGRES_DB:-platform}"
 POSTGRES_USER="${POSTGRES_USER:-platform}"
 APP_PORT="${APP_PORT:-4173}"
 : "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/validate-image-ref.sh
+source "${SCRIPT_DIR}/lib/validate-image-ref.sh"
 
 command -v docker >/dev/null || { echo "Docker is required"; exit 1; }
 if ! docker compose version >/dev/null 2>&1; then
@@ -23,44 +27,39 @@ MSG
 fi
 command -v jq >/dev/null || { echo "jq is required"; exit 1; }
 [ -f "$COMPOSE_FILE" ] || { echo "Missing $COMPOSE_FILE"; exit 1; }
-[ -f "$METADATA_FILE" ] || { echo "Missing $METADATA_FILE"; exit 1; }
+[ -f "$RELEASE_JSON" ] || { echo "Missing $RELEASE_JSON"; exit 1; }
+[ -f "${DEPLOY_ROOT}/checksums.txt" ] || { echo "Missing ${DEPLOY_ROOT}/checksums.txt"; exit 1; }
 
-VERSION="$(jq -er '.version' "$METADATA_FILE")"
-WEB_REF="$(jq -er '.webImage' "$METADATA_FILE")"
-API_REF="$(jq -er '.apiImage' "$METADATA_FILE")"
-WEB_ID="$(jq -r '.webImageId // empty' "$METADATA_FILE")"
-API_ID="$(jq -r '.apiImageId // empty' "$METADATA_FILE")"
+echo "Verifying release bundle integrity..."
+(
+  cd "$DEPLOY_ROOT"
+  sha256sum -c checksums.txt
+)
 
-# Never pass registry digest refs to Compose — they do not survive docker save/load.
-WEB_IMAGE="platform-web:${VERSION}"
-API_IMAGE="platform-api:${VERSION}"
+VERSION="$(jq -er '.version' "$RELEASE_JSON")"
+COMMIT="$(jq -er '.commit' "$RELEASE_JSON")"
+WEB_IMAGE="$(jq -er '.images.web.reference' "$RELEASE_JSON")"
+API_IMAGE="$(jq -er '.images.api.reference' "$RELEASE_JSON")"
 
-ensure_local_tag() {
-  local local_tag="$1"
-  local image_id="$2"
-  local source_ref="$3"
+if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "release.json commit must be a full SHA" >&2
+  exit 1
+fi
 
-  if docker image inspect "$local_tag" >/dev/null 2>&1; then
+validate_image_reference "$WEB_IMAGE"
+validate_image_reference "$API_IMAGE"
+validate_compose_application_images "$COMPOSE_FILE" "$WEB_IMAGE" "$API_IMAGE"
+
+ensure_image_present() {
+  local ref="$1"
+  if docker image inspect "$ref" >/dev/null 2>&1; then
     return 0
   fi
-  if [ -n "$image_id" ] && docker image inspect "$image_id" >/dev/null 2>&1; then
-    docker tag "$image_id" "$local_tag"
-    return 0
-  fi
-  if docker image inspect "$source_ref" >/dev/null 2>&1; then
-    docker tag "$source_ref" "$local_tag"
-    return 0
-  fi
-
-  echo "Missing local image for $local_tag" >&2
-  echo "  tried id=${image_id:-<none>} ref=${source_ref}" >&2
+  echo "Missing local image for ${ref} (transfer/load must provide release digests)" >&2
   docker images
   exit 1
 }
 
-# Docker platform-web is the only process that should bind APP_PORT.
-# Stop a leftover Node/Vite preview (and its user systemd unit) with no delay,
-# then return so the caller can run compose up immediately.
 free_host_port() {
   local port="$1"
   local ids="" pid="" unit=""
@@ -96,8 +95,8 @@ free_host_port() {
   fuser -k "${port}/tcp" 2>/dev/null || true
 }
 
-ensure_local_tag "$WEB_IMAGE" "$WEB_ID" "$WEB_REF"
-ensure_local_tag "$API_IMAGE" "$API_ID" "$API_REF"
+ensure_image_present "$WEB_IMAGE"
+ensure_image_present "$API_IMAGE"
 
 mkdir -p "$DEPLOY_ROOT"
 if [ -f "$CURRENT_ENV" ]; then
@@ -115,34 +114,39 @@ POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 WEB_IMAGE=${WEB_IMAGE}
 API_IMAGE=${API_IMAGE}
 RELEASE_VERSION=${VERSION}
+RELEASE_COMMIT=${COMMIT}
 GITHUB_TOKEN=${GITHUB_TOKEN:-}
 GITHUB_OWNER=${GITHUB_OWNER:-}
 GITHUB_REPO=${GITHUB_REPO:-}
 EOF
 chmod 600 "$NEXT_ENV"
 
-echo "Starting PostgreSQL..."
+validate_compose_application_images "$COMPOSE_FILE" "$WEB_IMAGE" "$API_IMAGE"
+
+if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_OWNER:-}" ] || [ -z "${GITHUB_REPO:-}" ]; then
+  echo "WARNING: GITHUB_TOKEN/OWNER/REPO incomplete — /api/pipelines/* (except status) will return 503" >&2
+fi
+
+echo "Starting PostgreSQL for release ${VERSION} (commit ${COMMIT})..."
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d postgres --wait
 
 echo "Applying forward-only database migrations..."
-# The Compose plugin CD installs (reusable-deploy.yml COMPOSE_VERSION, v2.32.4)
-# accepts --no-build on `up` and `create` only. `run --no-build` exits 16 with
-# "unknown flag: --no-build" before migrate.js starts. `run --pull never` is
-# supported: ensure_local_tag already required API_IMAGE on this host, and
-# pull_policy=never is not "build", so v2.32.4 skips rebuilding that image.
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm --pull never api node src/migrate.js
 
-echo "Deploying API and web images (${WEB_IMAGE}, ${API_IMAGE})..."
+echo "Deploying API and web images by digest..."
+echo "  web=${WEB_IMAGE}"
+echo "  api=${API_IMAGE}"
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" stop web >/dev/null 2>&1 || true
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" rm -f web >/dev/null 2>&1 || true
-# Free 4173 in the same moment as compose up. An earlier kill lets a Node
-# preview respawn during Postgres/migrations and steal the port again.
 free_host_port "$APP_PORT"
-if ! docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build; then
+if ! docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build --pull never; then
   echo "Compose up failed; freeing port ${APP_PORT} and retrying once" >&2
   free_host_port "$APP_PORT"
-  docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build
+  docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build --pull never
 fi
+
+verify_running_service_digest "$COMPOSE_FILE" "$NEXT_ENV" web "$WEB_IMAGE"
+verify_running_service_digest "$COMPOSE_FILE" "$NEXT_ENV" api "$API_IMAGE"
 
 echo "Running full-stack health checks..."
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/ready" >/dev/null
@@ -150,4 +154,4 @@ curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/" >/dev/null
 
 mv "$NEXT_ENV" "$CURRENT_ENV"
 trap - EXIT
-echo "Release ${VERSION} deployed successfully."
+echo "Release ${VERSION} (commit ${COMMIT}) deployed successfully."

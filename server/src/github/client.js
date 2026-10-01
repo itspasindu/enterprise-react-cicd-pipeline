@@ -21,15 +21,23 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
       }
     }
 
-    const response = await fetchImpl(url, {
-      method,
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'platform-api-pipeline-monitor',
-      },
-    })
+    let response
+    try {
+      response = await fetchImpl(url, {
+        method,
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'platform-api-pipeline-monitor',
+        },
+      })
+    } catch (error) {
+      throw new GithubApiError(
+        `GitHub API unreachable (${error?.cause?.code || error?.code || error?.message || 'network error'})`,
+        { status: 502 }
+      )
+    }
 
     const text = await response.text()
     let body = null
