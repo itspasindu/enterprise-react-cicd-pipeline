@@ -107,8 +107,48 @@ ls -lh "${workdir}/web.tar.gz" "${workdir}/api.tar.gz"
 
 echo "Syncing immutable release bundle to ${DEPLOY_ROOT}"
 "${SSH[@]}" "$REMOTE" "mkdir -p '${DEPLOY_ROOT}'"
-"${SSH[@]}" "$REMOTE" "if [ -f '${DEPLOY_ROOT}/release.json' ]; then cp '${DEPLOY_ROOT}/release.json' '${DEPLOY_ROOT}/previous-release.json'; fi"
-"${SSH[@]}" "$REMOTE" "if [ -f '${DEPLOY_ROOT}/compose.yml' ]; then cp '${DEPLOY_ROOT}/compose.yml' '${DEPLOY_ROOT}/previous-compose.yml'; fi"
+"${SSH[@]}" "$REMOTE" \
+  "DEPLOY_ROOT='${DEPLOY_ROOT}' bash -s" <<'EOF'
+set -euo pipefail
+
+backup_if_possible() {
+  local src="$1"
+  local dest="$2"
+  [ -f "$src" ] || return 0
+  if cp "$src" "$dest" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$dest" 2>/dev/null || true
+  if cp "$src" "$dest" 2>/dev/null; then
+    return 0
+  fi
+  echo "WARNING: could not backup ${src} -> ${dest} (permission denied); continuing" >&2
+}
+
+# Older deploys may have left root-owned files under /opt/platform. Prefer a
+# best-effort previous-* backup, then clear unwritable targets rsync must replace.
+backup_if_possible "${DEPLOY_ROOT}/release.json" "${DEPLOY_ROOT}/previous-release.json"
+backup_if_possible "${DEPLOY_ROOT}/compose.yml" "${DEPLOY_ROOT}/previous-compose.yml"
+
+for name in release.json release-metadata.json checksums.txt compose.yml \
+  deploy-stack.sh rollback-stack.sh health-check.sh transfer-release-images.sh \
+  web-sbom.cyclonedx.json api-sbom.cyclonedx.json; do
+  path="${DEPLOY_ROOT}/${name}"
+  if [ -e "$path" ] && [ ! -w "$path" ]; then
+    if rm -f "$path" 2>/dev/null; then
+      echo "Removed unwritable ${path} so the new release can be synced"
+    else
+      echo "ERROR: ${path} is not writable and could not be replaced" >&2
+      ls -la "${DEPLOY_ROOT}" >&2 || true
+      exit 1
+    fi
+  fi
+done
+if [ -d "${DEPLOY_ROOT}/lib" ] && [ ! -w "${DEPLOY_ROOT}/lib" ]; then
+  echo "ERROR: ${DEPLOY_ROOT}/lib is not writable" >&2
+  exit 1
+fi
+EOF
 rsync -az -e "$RSYNC_RSH" "${RELEASE_DIR}/" "${REMOTE}:${DEPLOY_ROOT}/"
 
 "${SSH[@]}" "$REMOTE" "cd '${DEPLOY_ROOT}' && sha256sum -c checksums.txt"
