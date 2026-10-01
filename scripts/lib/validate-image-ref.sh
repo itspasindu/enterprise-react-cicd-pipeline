@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Immutable deployment image references: name@sha256:<64 hex chars>
+# Immutable image identity helpers.
 # Source this file; do not execute it directly.
 
+# GHCR / registry manifest reference: name@sha256:<64 hex>
 validate_image_reference() {
   local image="${1:-}"
   if [ -z "$image" ] || [ "$image" = "null" ]; then
@@ -9,14 +10,28 @@ validate_image_reference() {
     return 1
   fi
   if [[ ! "$image" =~ @sha256:[a-f0-9]{64}$ ]]; then
-    echo "ERROR: Mutable Docker image reference detected (deployment requires @sha256:<digest>):" >&2
+    echo "ERROR: Mutable Docker image reference detected (requires name@sha256:<digest>):" >&2
     echo "$image" >&2
     return 1
   fi
   return 0
 }
 
-# Application services only (postgres base image is excluded).
+# Local runtime identity after docker save/load: sha256:<64 hex> (image config Id)
+validate_image_id() {
+  local image="${1:-}"
+  if [ -z "$image" ] || [ "$image" = "null" ]; then
+    echo "ERROR: Missing image Id" >&2
+    return 1
+  fi
+  if [[ ! "$image" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    echo "ERROR: Expected local image Id sha256:<64 hex>, got:" >&2
+    echo "$image" >&2
+    return 1
+  fi
+  return 0
+}
+
 compose_service_image() {
   local compose_file="$1"
   local service="$2"
@@ -27,48 +42,32 @@ compose_service_image() {
     | tr -d '\r'
 }
 
-validate_compose_application_images() {
+# Release compose must use env placeholders (digest refs are not portable across docker load).
+validate_release_compose_placeholders() {
   local compose_file="$1"
-  local web_ref="$2"
-  local api_ref="$3"
-  local web_line=""
-  local api_line=""
-
-  validate_image_reference "$web_ref" || return 1
-  validate_image_reference "$api_ref" || return 1
-
+  local web_line api_line
   web_line="$(compose_service_image "$compose_file" web)"
   api_line="$(compose_service_image "$compose_file" api)"
-
-  if [ "$web_line" != "$web_ref" ]; then
-    echo "ERROR: compose web image mismatch" >&2
-    echo "  expected: $web_ref" >&2
-    echo "  compose:  $web_line" >&2
+  if [ "$web_line" != '${WEB_IMAGE}' ]; then
+    echo "ERROR: release compose web image must be \${WEB_IMAGE}, got: ${web_line}" >&2
     return 1
   fi
-  if [ "$api_line" != "$api_ref" ]; then
-    echo "ERROR: compose api image mismatch" >&2
-    echo "  expected: $api_ref" >&2
-    echo "  compose:  $api_line" >&2
+  if [ "$api_line" != '${API_IMAGE}' ]; then
+    echo "ERROR: release compose api image must be \${API_IMAGE}, got: ${api_line}" >&2
     return 1
   fi
-
-  validate_image_reference "$web_line" || return 1
-  validate_image_reference "$api_line" || return 1
   return 0
 }
 
-verify_running_service_digest() {
+verify_running_service_id() {
   local compose_file="$1"
   local env_file="$2"
   local service="$3"
-  local expected_ref="$4"
-  local expected_id=""
+  local expected_id="$4"
   local cid=""
   local running_id=""
 
-  validate_image_reference "$expected_ref" || return 1
-  expected_id="$(docker image inspect "$expected_ref" --format '{{.Id}}')"
+  validate_image_id "$expected_id" || return 1
   cid="$(docker compose --env-file "$env_file" -f "$compose_file" ps -q "$service" 2>/dev/null | head -n1)"
   if [ -z "$cid" ]; then
     echo "ERROR: No running container for service ${service}" >&2
@@ -76,11 +75,11 @@ verify_running_service_digest() {
   fi
   running_id="$(docker inspect "$cid" --format '{{.Image}}')"
   if [ "$running_id" != "$expected_id" ]; then
-    echo "ERROR: Running ${service} image does not match expected digest reference" >&2
-    echo "  expected image id: ${expected_id} (${expected_ref})" >&2
-    echo "  running image id:  ${running_id}" >&2
+    echo "ERROR: Running ${service} image Id does not match release imageId" >&2
+    echo "  expected: ${expected_id}" >&2
+    echo "  running:  ${running_id}" >&2
     return 1
   fi
-  echo "Verified ${service} runs ${expected_ref}"
+  echo "Verified ${service} runs ${expected_id}"
   return 0
 }

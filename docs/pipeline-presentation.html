@@ -77,7 +77,7 @@
     <div class="code">ghcr.io/&lt;owner&gt;/platform-web:YYYY.MM.N<br>ghcr.io/&lt;owner&gt;/platform-api:YYYY.MM.N</div>
     <div class="grid two">
       <div class="card"><h3>Traceable</h3><p><code>:staging</code>, <code>:sha-short</code>, SBOM, git revision, and provenance.</p></div>
-      <div class="card"><h3>Immutable deployment</h3><p>CD deploys <code>image@sha256:digest</code>, never a mutable tag. Images are transferred to the VM over SSH.</p></div>
+      <div class="card"><h3>Immutable deployment</h3><p>CI records GHCR <code>@sha256</code> digests plus local <code>imageId</code> values. After offline <code>docker load</code>, Compose runs by config Id — never a mutable tag.</p></div>
     </div>
     <div class="footer"><span>Container release</span><span>06 / 13</span></div>
   </section>

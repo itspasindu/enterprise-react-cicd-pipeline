@@ -38,24 +38,28 @@ echo "Verifying release bundle integrity..."
 
 VERSION="$(jq -er '.version' "$RELEASE_JSON")"
 COMMIT="$(jq -er '.commit' "$RELEASE_JSON")"
-WEB_IMAGE="$(jq -er '.images.web.reference' "$RELEASE_JSON")"
-API_IMAGE="$(jq -er '.images.api.reference' "$RELEASE_JSON")"
+WEB_REF="$(jq -er '.images.web.reference' "$RELEASE_JSON")"
+API_REF="$(jq -er '.images.api.reference' "$RELEASE_JSON")"
+WEB_IMAGE="$(jq -er '.images.web.imageId' "$RELEASE_JSON")"
+API_IMAGE="$(jq -er '.images.api.imageId' "$RELEASE_JSON")"
 
 if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
   echo "release.json commit must be a full SHA" >&2
   exit 1
 fi
 
-validate_image_reference "$WEB_IMAGE"
-validate_image_reference "$API_IMAGE"
-validate_compose_application_images "$COMPOSE_FILE" "$WEB_IMAGE" "$API_IMAGE"
+validate_image_reference "$WEB_REF"
+validate_image_reference "$API_REF"
+validate_image_id "$WEB_IMAGE"
+validate_image_id "$API_IMAGE"
+validate_release_compose_placeholders "$COMPOSE_FILE"
 
 ensure_image_present() {
   local ref="$1"
   if docker image inspect "$ref" >/dev/null 2>&1; then
     return 0
   fi
-  echo "Missing local image for ${ref} (transfer/load must provide release digests)" >&2
+  echo "Missing local image for ${ref} (transfer/load must provide release imageId)" >&2
   docker images
   exit 1
 }
@@ -113,6 +117,8 @@ POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 WEB_IMAGE=${WEB_IMAGE}
 API_IMAGE=${API_IMAGE}
+WEB_DIGEST_REF=${WEB_REF}
+API_DIGEST_REF=${API_REF}
 RELEASE_VERSION=${VERSION}
 RELEASE_COMMIT=${COMMIT}
 GITHUB_TOKEN=${GITHUB_TOKEN:-}
@@ -120,8 +126,6 @@ GITHUB_OWNER=${GITHUB_OWNER:-}
 GITHUB_REPO=${GITHUB_REPO:-}
 EOF
 chmod 600 "$NEXT_ENV"
-
-validate_compose_application_images "$COMPOSE_FILE" "$WEB_IMAGE" "$API_IMAGE"
 
 if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_OWNER:-}" ] || [ -z "${GITHUB_REPO:-}" ]; then
   echo "WARNING: GITHUB_TOKEN/OWNER/REPO incomplete — /api/pipelines/* (except status) will return 503" >&2
@@ -133,9 +137,11 @@ docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d postgres --wait
 echo "Applying forward-only database migrations..."
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm --pull never api node src/migrate.js
 
-echo "Deploying API and web images by digest..."
-echo "  web=${WEB_IMAGE}"
-echo "  api=${API_IMAGE}"
+echo "Deploying API and web by immutable image Id (from GHCR digests)..."
+echo "  web ref=${WEB_REF}"
+echo "  web id =${WEB_IMAGE}"
+echo "  api ref=${API_REF}"
+echo "  api id =${API_IMAGE}"
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" stop web >/dev/null 2>&1 || true
 docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" rm -f web >/dev/null 2>&1 || true
 free_host_port "$APP_PORT"
@@ -145,8 +151,8 @@ if ! docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wa
   docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build --pull never
 fi
 
-verify_running_service_digest "$COMPOSE_FILE" "$NEXT_ENV" web "$WEB_IMAGE"
-verify_running_service_digest "$COMPOSE_FILE" "$NEXT_ENV" api "$API_IMAGE"
+verify_running_service_id "$COMPOSE_FILE" "$NEXT_ENV" web "$WEB_IMAGE"
+verify_running_service_id "$COMPOSE_FILE" "$NEXT_ENV" api "$API_IMAGE"
 
 echo "Running full-stack health checks..."
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/ready" >/dev/null

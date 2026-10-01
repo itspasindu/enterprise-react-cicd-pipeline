@@ -54,15 +54,20 @@ jobs:
           source release/lib/validate-image-ref.sh
           WEB_REF="$(jq -er '.images.web.reference' release/release.json)"
           API_REF="$(jq -er '.images.api.reference' release/release.json)"
+          WEB_ID="$(jq -er '.images.web.imageId' release/release.json)"
+          API_ID="$(jq -er '.images.api.imageId' release/release.json)"
           validate_image_reference "$WEB_REF"
           validate_image_reference "$API_REF"
-          validate_compose_application_images release/compose.yml "$WEB_REF" "$API_REF"
+          validate_image_id "$WEB_ID"
+          validate_image_id "$API_ID"
+          validate_release_compose_placeholders release/compose.yml
           chmod a-w release/release.json release/checksums.txt release/compose.yml \
             release/deploy-stack.sh release/rollback-stack.sh release/health-check.sh \
             release/transfer-release-images.sh release/lib/image-archive.sh \
             release/lib/validate-image-ref.sh 2>/dev/null || true
           echo "Release $(jq -r .version release/release.json) commit=$(jq -r .commit release/release.json)"
           echo "Deploy digests web=${WEB_REF} api=${API_REF}"
+          echo "Runtime Ids web=${WEB_ID} api=${API_ID}"
       - name: Require pipeline monitor token
         env:
           PIPELINE_GITHUB_TOKEN: ${{ secrets.PIPELINE_GITHUB_TOKEN }}
@@ -96,13 +101,25 @@ jobs:
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           WEB_REF="$(jq -er '.images.web.reference' release/release.json)"
           API_REF="$(jq -er '.images.api.reference' release/release.json)"
+          WEB_ID="$(jq -er '.images.web.imageId' release/release.json)"
+          API_ID="$(jq -er '.images.api.imageId' release/release.json)"
           VERSION="$(jq -er '.version' release/release.json)"
           validate_image_reference "$WEB_REF"
           validate_image_reference "$API_REF"
+          validate_image_id "$WEB_ID"
+          validate_image_id "$API_ID"
           echo "Pulling ${WEB_REF}"
           docker pull "$WEB_REF"
           echo "Pulling ${API_REF}"
           docker pull "$API_REF"
+          PULLED_WEB_ID="$(docker image inspect --format='{{.Id}}' "$WEB_REF")"
+          PULLED_API_ID="$(docker image inspect --format='{{.Id}}' "$API_REF")"
+          if [ "$PULLED_WEB_ID" != "$WEB_ID" ] || [ "$PULLED_API_ID" != "$API_ID" ]; then
+            echo "Pulled image Ids do not match release.json imageId" >&2
+            echo "  web got=${PULLED_WEB_ID} want=${WEB_ID}" >&2
+            echo "  api got=${PULLED_API_ID} want=${API_ID}" >&2
+            exit 1
+          fi
           {
             echo "WEB_IMAGE=${WEB_REF}"
             echo "API_IMAGE=${API_REF}"

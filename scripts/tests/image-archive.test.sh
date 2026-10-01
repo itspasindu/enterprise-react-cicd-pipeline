@@ -49,6 +49,8 @@ web_ref="platform-web:staging-1-1"
 api_ref="platform-api:2026.09.1"
 web_digest="ghcr.io/acme/platform-web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 api_digest="ghcr.io/acme/platform-api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+web_id="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+api_id="sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 
 make_tar "${tmp}/docker-web.tar" manifest.json \
   "[{\"Config\":\"abc\",\"RepoTags\":[\"${web_ref}\"],\"Layers\":[\"layer.tar\"]}]"
@@ -97,26 +99,33 @@ expect_transfer_failure() {
   fi
 }
 
+write_release() {
+  local dir="$1"
+  mkdir -p "$dir"
+  jq -n \
+    --arg v "2026.09.1" \
+    --arg w "$web_digest" \
+    --arg a "$api_digest" \
+    --arg wid "$web_id" \
+    --arg aid "$api_id" \
+    '{
+      version: $v,
+      images: {
+        web: { reference: $w, imageId: $wid },
+        api: { reference: $a, imageId: $aid }
+      }
+    }' > "${dir}/release.json"
+  printf '%s\n' 'deadbeef  release.json' > "${dir}/checksums.txt"
+  printf '%s\n' '  web:' '    image: ${WEB_IMAGE}' '  api:' '    image: ${API_IMAGE}' > "${dir}/compose.yml"
+}
+
 expect_transfer_failure "Mutable Docker image reference" \
   HOST=staging.example USER=deploy DEPLOY_ROOT=/opt/platform VERSION=2026.09.1 \
   WEB_IMAGE='platform-web:2026.09.1' \
   API_IMAGE="$api_digest" \
   RELEASE_DIR="${tmp}/bad-release"
 
-mkdir -p "${tmp}/bad-release"
-jq -n \
-  --arg v "2026.09.1" \
-  --arg w "$web_digest" \
-  --arg a "$api_digest" \
-  '{
-    version: $v,
-    images: {
-      web: { reference: $w },
-      api: { reference: $a }
-    }
-  }' > "${tmp}/bad-release/release.json"
-printf '%s\n' 'deadbeef  release.json' > "${tmp}/bad-release/checksums.txt"
-printf '%s\n' '  web:' '    image: '"$web_digest" '  api:' '    image: '"$api_digest" > "${tmp}/bad-release/compose.yml"
+write_release "${tmp}/bad-release"
 
 expect_transfer_failure "Missing" \
   HOST=staging.example USER=deploy DEPLOY_ROOT=/opt/platform VERSION=2026.09.1 \
@@ -134,6 +143,19 @@ expect_transfer_failure "must be different" \
   HOST=staging.example USER=deploy DEPLOY_ROOT=/opt/platform VERSION=2026.09.1 \
   WEB_IMAGE="$web_digest" \
   API_IMAGE="$web_digest" \
+  RELEASE_DIR="${tmp}/bad-release"
+
+# Bad compose that still bakes digest refs (not portable across docker load).
+printf '%s\n' '  web:' '    image: '"$web_digest" '  api:' '    image: '"$api_digest" > "${tmp}/bad-release/compose.yml"
+(
+  cd "${tmp}/bad-release"
+  # shellcheck disable=SC2038
+  find . -type f ! -name checksums.txt -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+) > "${tmp}/bad-release/checksums.txt"
+expect_transfer_failure 'must be ${WEB_IMAGE}' \
+  HOST=staging.example USER=deploy DEPLOY_ROOT=/opt/platform VERSION=2026.09.1 \
+  WEB_IMAGE="$web_digest" \
+  API_IMAGE="$api_digest" \
   RELEASE_DIR="${tmp}/bad-release"
 
 echo "image-archive tests passed"

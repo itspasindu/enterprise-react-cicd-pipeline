@@ -72,11 +72,11 @@ ghcr.io/<owner>/platform-web:YYYY.MM.N
 ghcr.io/<owner>/platform-api:YYYY.MM.N
 ```
 
-Both also receive `:staging` and `:sha-<short>`. The release metadata stores immutable references:
+Both also receive `:staging` and `:sha-<short>`. The release metadata stores two immutable identities per image:
 
 ```text
-ghcr.io/<owner>/platform-web@sha256:<digest>
-ghcr.io/<owner>/platform-api@sha256:<digest>
+reference (GHCR manifest): ghcr.io/<owner>/platform-web@sha256:<manifest-digest>
+imageId   (config digest): sha256:<image-config-id>
 ```
 
 Each image is built once (`load: true`), scanned with Trivy on that local tag, then pushed with `docker push` (no second build). Scoped Buildx caches, CycloneDX SBOMs, and provenance attestations apply to the same pushed digest. Releases with fixed HIGH/CRITICAL image vulnerabilities are blocked before push.
@@ -85,12 +85,12 @@ Each image is built once (`load: true`), scanned with Trivy on that local tag, t
 
 The `release-bundle` artifact contains:
 
-- `release.json` — immutable manifest (full commit SHA, GHCR `@sha256` references, local tags, workflow run id)
+- `release.json` — immutable manifest (full commit SHA, GHCR `@sha256` references, local `imageId` values, CalVer tags, workflow run id)
 - `checksums.txt` — integrity verification for all bundled files
-- `compose.yml` — release-pinned Compose (no `build:` keys; web/api `image:` lines are `ghcr.io/...@sha256:<digest>`)
-- `deploy-stack.sh`, `rollback-stack.sh`, `health-check.sh`, `transfer-release-images.sh`, `lib/image-archive.sh`
+- `compose.yml` — release-pinned Compose (no `build:` keys; web/api `image:` lines are `${WEB_IMAGE}` / `${API_IMAGE}` placeholders)
+- `deploy-stack.sh`, `rollback-stack.sh`, `health-check.sh`, `transfer-release-images.sh`, `lib/image-archive.sh`, `lib/validate-image-ref.sh`
 - web and API CycloneDX SBOMs
-- `release-metadata.json` — legacy alias with the same digest references
+- `release-metadata.json` — legacy alias with the same digest references and image Ids
 
 A second artifact is also uploaded as `release-<CalVer>-<full-sha>` (immutable name; not `latest`).
 
@@ -104,12 +104,12 @@ Deployment steps:
 2. Enter the `staging` GitHub Environment.
 3. Optionally connect the runner with Tailscale.
 4. Verify the pinned SSH host key.
-5. Verify `checksums.txt`, read `release.json`, and pull both immutable GHCR digests on the runner.
-6. Pull and transfer images by `release.json` `images.*.reference` digest refs only (no mutable tag deployment).
-7. Copy the release bundle to the deploy root (`/opt/platform` when writable) via `transfer-release-images.sh` (includes `docker save`/`load` per image).
+5. Verify `checksums.txt`, read `release.json`, and pull both immutable GHCR digests on the runner (assert pulled config Ids match `images.*.imageId`).
+6. Transfer images by digest reference: `docker save` on the runner, `docker load` on the VM, then verify the loaded config Id matches `imageId` (RepoDigests are not reliable after offline load).
+7. Copy the release bundle to the deploy root (`/opt/platform` when writable).
 8. Start PostgreSQL and wait for health.
 9. Apply forward-only migrations.
-10. Roll out API and web and wait for Compose health.
+10. Roll out API and web with `WEB_IMAGE`/`API_IMAGE` set to the portable `imageId` values and wait for Compose health.
 11. Smoke-test `/`, `/about`, `/contact`, `/api/health`, `/api/ready`, and pipeline endpoints.
 
 CD does not check out the application repository or overlay deployment files from the current branch.
@@ -136,7 +136,7 @@ Migrations are transaction-wrapped, recorded in `schema_migrations`, and forward
 3. backfill
 4. remove old structures in a later release
 
-Rollback restores prior web and API image digests from `/opt/platform/previous.env`. PostgreSQL data and applied migrations are preserved to prevent destructive automated rollback.
+Rollback restores prior web and API image Ids from `/opt/platform/previous-release.json` (falling back to `previous.env`). Legacy mutable tags in older `previous.env` files are skipped with a warning rather than failing the CD recovery path. PostgreSQL data and applied migrations are preserved to prevent destructive automated rollback.
 
 ## Failure issues and wiki
 
