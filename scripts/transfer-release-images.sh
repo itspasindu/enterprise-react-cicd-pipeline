@@ -72,6 +72,15 @@ if [ "$WEB_ID" != "$EXPECTED_WEB_ID" ] || [ "$API_ID" != "$EXPECTED_API_ID" ]; t
   exit 1
 fi
 
+# Content identity for offline load: some Docker daemons rewrite config Ids on
+# docker load (OCI/docker media-type conversion). RootFS layer digests stay stable.
+WEB_ROOTFS="$(docker image inspect --format='{{json .RootFS.Layers}}' "$EXPECTED_WEB_ID")"
+API_ROOTFS="$(docker image inspect --format='{{json .RootFS.Layers}}' "$EXPECTED_API_ID")"
+if [ -z "$WEB_ROOTFS" ] || [ "$WEB_ROOTFS" = "null" ] || [ -z "$API_ROOTFS" ] || [ "$API_ROOTFS" = "null" ]; then
+  echo "Failed to read RootFS.Layers for release images" >&2
+  exit 1
+fi
+
 known_hosts="${HOME}/.ssh/known_hosts"
 if [ ! -f "$known_hosts" ]; then
   echo "Missing ${known_hosts}" >&2
@@ -91,8 +100,6 @@ save_checked_archive() {
   local image_id="$2"
   local dest="$3"
   echo "Saving ${ref} by image Id ${image_id}"
-  # Save by config Id so offline load restores the same Id. Saving a
-  # name@sha256 manifest ref can rewrite the local Id on docker load.
   docker save -o "$dest" "$image_id"
   if [ ! -s "$dest" ]; then
     echo "Refusing to transfer empty archive for ${ref}" >&2
@@ -132,7 +139,7 @@ backup_if_possible "${DEPLOY_ROOT}/compose.yml" "${DEPLOY_ROOT}/previous-compose
 
 for name in release.json release-metadata.json checksums.txt compose.yml \
   deploy-stack.sh rollback-stack.sh health-check.sh transfer-release-images.sh \
-  web-sbom.cyclonedx.json api-sbom.cyclonedx.json; do
+  web-sbom.cyclonedx.json api-sbom.cyclonedx.json runtime-images.env; do
   path="${DEPLOY_ROOT}/${name}"
   if [ -e "$path" ] && [ ! -w "$path" ]; then
     if rm -f "$path" 2>/dev/null; then
@@ -157,22 +164,31 @@ remote_dir="${DEPLOY_ROOT}/.image-transfer"
 "${SSH[@]}" "$REMOTE" "rm -rf '${remote_dir}' && mkdir -p '${remote_dir}'"
 "${SCP[@]}" "${workdir}/web.tar.gz" "${workdir}/api.tar.gz" "${REMOTE}:${remote_dir}/"
 
+# Base64 RootFS JSON so it survives SSH env safely.
+WEB_ROOTFS_B64="$(printf '%s' "$WEB_ROOTFS" | base64 -w 0 2>/dev/null || printf '%s' "$WEB_ROOTFS" | base64)"
+API_ROOTFS_B64="$(printf '%s' "$API_ROOTFS" | base64 -w 0 2>/dev/null || printf '%s' "$API_ROOTFS" | base64)"
+
 "${SSH[@]}" "$REMOTE" \
-  "REMOTE_DIR='${remote_dir}' WEB_REF='${WEB_IMAGE}' API_REF='${API_IMAGE}' WEB_ID='${EXPECTED_WEB_ID}' API_ID='${EXPECTED_API_ID}' bash -s" <<'EOF'
+  "REMOTE_DIR='${remote_dir}' DEPLOY_ROOT='${DEPLOY_ROOT}' WEB_REF='${WEB_IMAGE}' API_REF='${API_IMAGE}' WEB_ID='${EXPECTED_WEB_ID}' API_ID='${EXPECTED_API_ID}' WEB_ROOTFS_B64='${WEB_ROOTFS_B64}' API_ROOTFS_B64='${API_ROOTFS_B64}' bash -s" <<'EOF'
 set -euo pipefail
 trap 'rm -rf "$REMOTE_DIR"' EXIT
+
+WEB_ROOTFS="$(printf '%s' "$WEB_ROOTFS_B64" | base64 -d)"
+API_ROOTFS="$(printf '%s' "$API_ROOTFS_B64" | base64 -d)"
 
 load_one() {
   local archive="$1"
   local digest_ref="$2"
   local expected_id="$3"
+  local expected_rootfs="$4"
   local plain="${archive%.gz}"
-  local load_out="" loaded_id=""
+  local load_out="" loaded_id="" loaded_rootfs=""
 
-  echo "Loading ${archive} for ${digest_ref} (expect Id ${expected_id})"
+  echo "Loading ${archive} for ${digest_ref}" >&2
+  echo "  release imageId=${expected_id}" >&2
   gzip -dc "$archive" > "$plain"
   load_out="$(docker load -i "$plain")"
-  printf '%s\n' "$load_out"
+  printf '%s\n' "$load_out" >&2
 
   if docker image inspect "$expected_id" >/dev/null 2>&1; then
     loaded_id="$expected_id"
@@ -186,22 +202,42 @@ load_one() {
     exit 1
   fi
 
-  if [ "$loaded_id" != "$expected_id" ]; then
-    echo "Loaded image Id mismatch for ${digest_ref}" >&2
-    echo "  got=${loaded_id}" >&2
-    echo "  want=${expected_id}" >&2
-    echo "  docker load output:" >&2
-    printf '%s\n' "$load_out" >&2
+  docker image inspect "$loaded_id" >/dev/null
+  loaded_rootfs="$(docker image inspect --format='{{json .RootFS.Layers}}' "$loaded_id")"
+  if [ "$loaded_rootfs" != "$expected_rootfs" ]; then
+    echo "Loaded RootFS.Layers mismatch for ${digest_ref}" >&2
+    echo "  loaded Id=${loaded_id}" >&2
+    echo "  release Id=${expected_id}" >&2
+    echo "  got layers=${loaded_rootfs}" >&2
+    echo "  want layers=${expected_rootfs}" >&2
     exit 1
   fi
 
-  docker image inspect "$expected_id" >/dev/null
+  if [ "$loaded_id" != "$expected_id" ]; then
+    echo "NOTE: docker load rewrote config Id (${expected_id} -> ${loaded_id}); RootFS layers match." >&2
+  fi
+
   rm -f "$archive" "$plain"
-  echo "Loaded ${digest_ref} as ${expected_id}"
+  # Only the Id goes to stdout (captured by the caller).
+  printf '%s\n' "$loaded_id"
 }
 
-load_one "${REMOTE_DIR}/web.tar.gz" "$WEB_REF" "$WEB_ID"
-load_one "${REMOTE_DIR}/api.tar.gz" "$API_REF" "$API_ID"
+WEB_RUNTIME_ID="$(load_one "${REMOTE_DIR}/web.tar.gz" "$WEB_REF" "$WEB_ID" "$WEB_ROOTFS")"
+API_RUNTIME_ID="$(load_one "${REMOTE_DIR}/api.tar.gz" "$API_REF" "$API_ID" "$API_ROOTFS")"
+
+umask 077
+cat > "${DEPLOY_ROOT}/runtime-images.env" <<ENV
+WEB_IMAGE=${WEB_RUNTIME_ID}
+API_IMAGE=${API_RUNTIME_ID}
+WEB_DIGEST_REF=${WEB_REF}
+API_DIGEST_REF=${API_REF}
+WEB_RELEASE_IMAGE_ID=${WEB_ID}
+API_RELEASE_IMAGE_ID=${API_ID}
+ENV
+chmod 600 "${DEPLOY_ROOT}/runtime-images.env"
+echo "Wrote ${DEPLOY_ROOT}/runtime-images.env"
+echo "  web runtime Id=${WEB_RUNTIME_ID}"
+echo "  api runtime Id=${API_RUNTIME_ID}"
 EOF
 
 remote_web_ref="$("${SSH[@]}" "$REMOTE" "jq -er '.images.web.reference' '${DEPLOY_ROOT}/release.json'")"
@@ -212,5 +248,6 @@ if [ "$remote_web_ref" != "$EXPECTED_WEB" ] || [ "$remote_api_ref" != "$EXPECTED
 fi
 
 echo "Staged immutable release ${VERSION}"
-echo "  web=${WEB_IMAGE} (Id ${EXPECTED_WEB_ID})"
-echo "  api=${API_IMAGE} (Id ${EXPECTED_API_ID})"
+echo "  web=${WEB_IMAGE} (release Id ${EXPECTED_WEB_ID})"
+echo "  api=${API_IMAGE} (release Id ${EXPECTED_API_ID})"
+echo "  runtime Ids are recorded in ${DEPLOY_ROOT}/runtime-images.env after docker load"
