@@ -14,14 +14,15 @@ on:
       TAILSCALE_AUTHKEY:
         required: false
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   rollback:
     name: Roll Back Application Images
     runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      contents: read
     env:
       TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
     steps:

@@ -79,16 +79,20 @@ ghcr.io/<owner>/platform-web@sha256:<digest>
 ghcr.io/<owner>/platform-api@sha256:<digest>
 ```
 
-The job uses scoped GitHub Actions Buildx caches, generates CycloneDX SBOMs, publishes provenance attestations, and blocks releases with fixed HIGH/CRITICAL image vulnerabilities.
+Each image is built once (`load: true`), scanned with Trivy on that local tag, then pushed with `docker push` (no second build). Scoped Buildx caches, CycloneDX SBOMs, and provenance attestations apply to the same pushed digest. Releases with fixed HIGH/CRITICAL image vulnerabilities are blocked before push.
 
 ### Release bundle
 
 The `release-bundle` artifact contains:
 
-- `release-metadata.json`
-- `compose.yml`
+- `release.json` — immutable manifest (full commit SHA, GHCR `@sha256` references, local tags, workflow run id)
+- `checksums.txt` — integrity verification for all bundled files
+- `compose.yml` — release-pinned Compose (no `build:` keys; web/api `image:` lines are `ghcr.io/...@sha256:<digest>`)
+- `deploy-stack.sh`, `rollback-stack.sh`, `health-check.sh`, `transfer-release-images.sh`, `lib/image-archive.sh`
 - web and API CycloneDX SBOMs
-- `deploy-stack.sh`, `rollback-stack.sh`, `health-check.sh`
+- `release-metadata.json` — legacy alias with the same digest references
+
+A second artifact is also uploaded as `release-<CalVer>-<full-sha>` (immutable name; not `latest`).
 
 ## CD and staging
 
@@ -100,12 +104,15 @@ Deployment steps:
 2. Enter the `staging` GitHub Environment.
 3. Optionally connect the runner with Tailscale.
 4. Verify the pinned SSH host key.
-5. Pull both immutable image digests on the runner.
-6. Copy the release bundle (Compose, scripts, and SBOMs) to the deploy root (`/opt/platform` when writable). Transfer each image as its own `docker save` archive (`scp`, then `docker load -i`). Confirm both tags exist, retag as `platform-web:<CalVer>` / `platform-api:<CalVer>`, and rewrite `release-metadata.json` so Compose never receives a GHCR digest ref.
-7. Start PostgreSQL and wait for health.
-8. Apply forward-only migrations.
-9. Roll out API and web and wait for Compose health.
-10. Smoke-test `/`, `/about`, `/contact`, `/api/health`, and `/api/ready`.
+5. Verify `checksums.txt`, read `release.json`, and pull both immutable GHCR digests on the runner.
+6. Pull and transfer images by `release.json` `images.*.reference` digest refs only (no mutable tag deployment).
+7. Copy the release bundle to the deploy root (`/opt/platform` when writable) via `transfer-release-images.sh` (includes `docker save`/`load` per image).
+8. Start PostgreSQL and wait for health.
+9. Apply forward-only migrations.
+10. Roll out API and web and wait for Compose health.
+11. Smoke-test `/`, `/about`, `/contact`, `/api/health`, `/api/ready`, and pipeline endpoints.
+
+CD does not check out the application repository or overlay deployment files from the current branch.
 
 The VM does not need outbound access to GHCR.
 

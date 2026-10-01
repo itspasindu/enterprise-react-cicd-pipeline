@@ -3,14 +3,16 @@ name: Reusable Security
 on:
   workflow_call:
 
-permissions:
-  contents: read
-  security-events: write
+# Caller must grant at least contents:read + security-events:write (see ci.yml).
+# Individual jobs further restrict where SARIF upload is not needed.
+permissions: {}
 
 jobs:
   dependencies:
     name: Dependency and Secret Scans
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -33,6 +35,9 @@ jobs:
   code-scanning:
     name: CodeQL and Trivy
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: github/codeql-action/init@1b549b9259bda1cb5ddde3b41741a82a2d15a841 # v3.28.13

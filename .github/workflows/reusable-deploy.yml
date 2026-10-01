@@ -22,37 +22,47 @@ on:
       PIPELINE_GITHUB_TOKEN:
         required: false
 
-permissions:
-  contents: read
-  packages: read
+permissions: {}
 
 jobs:
   deploy:
     name: Deploy Full Stack to Staging
     runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      packages: read # docker login + pull immutable digests from GHCR
     env:
       TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          sparse-checkout: |
-            compose.yml
-            scripts/deploy-stack.sh
-            scripts/rollback-stack.sh
-            scripts/health-check.sh
-            scripts/transfer-release-images.sh
-            scripts/lib/image-archive.sh
-          sparse-checkout-cone-mode: false
+      # No repository checkout: deployment scripts come from the CI release bundle only.
       - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: ${{ inputs.artifact-name }}
           path: release/
-      - name: Overlay latest deploy scripts into release bundle
+      - name: Verify immutable release bundle
         run: |
-          test -d release
-          cp compose.yml scripts/deploy-stack.sh scripts/rollback-stack.sh scripts/health-check.sh release/
-          chmod +x release/deploy-stack.sh release/rollback-stack.sh release/health-check.sh
+          set -euo pipefail
+          test -f release/release.json
+          test -f release/checksums.txt
+          test -f release/compose.yml
+          test -f release/deploy-stack.sh
+          test -f release/rollback-stack.sh
+          test -f release/transfer-release-images.sh
+          (cd release && sha256sum -c checksums.txt)
+          chmod +x release/deploy-stack.sh release/rollback-stack.sh release/health-check.sh release/transfer-release-images.sh
+          # shellcheck source=lib/validate-image-ref.sh
+          source release/lib/validate-image-ref.sh
+          WEB_REF="$(jq -er '.images.web.reference' release/release.json)"
+          API_REF="$(jq -er '.images.api.reference' release/release.json)"
+          validate_image_reference "$WEB_REF"
+          validate_image_reference "$API_REF"
+          validate_compose_application_images release/compose.yml "$WEB_REF" "$API_REF"
+          chmod a-w release/release.json release/checksums.txt release/compose.yml \
+            release/deploy-stack.sh release/rollback-stack.sh release/health-check.sh \
+            release/transfer-release-images.sh release/lib/image-archive.sh \
+            release/lib/validate-image-ref.sh 2>/dev/null || true
+          echo "Release $(jq -r .version release/release.json) commit=$(jq -r .commit release/release.json)"
+          echo "Deploy digests web=${WEB_REF} api=${API_REF}"
       - name: Require pipeline monitor token
         env:
           PIPELINE_GITHUB_TOKEN: ${{ secrets.PIPELINE_GITHUB_TOKEN }}
@@ -76,28 +86,28 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$KNOWN_HOSTS" | sed 's/\r$//' > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
-      - name: Pull immutable images on runner
+      - name: Pull immutable release digests
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+          # shellcheck source=lib/validate-image-ref.sh
+          source release/lib/validate-image-ref.sh
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          WEB_IMAGE_DIGEST="$(jq -er '.webImage' release/release-metadata.json)"
-          API_IMAGE_DIGEST="$(jq -er '.apiImage' release/release-metadata.json)"
-          docker pull "$WEB_IMAGE_DIGEST"
-          docker pull "$API_IMAGE_DIGEST"
-
-          WEB_IMAGE="platform-web:staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          API_IMAGE="platform-api:staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker tag "$WEB_IMAGE_DIGEST" "$WEB_IMAGE"
-          docker tag "$API_IMAGE_DIGEST" "$API_IMAGE"
-
-          TMP_METADATA="$(mktemp)"
-          jq --arg web "$WEB_IMAGE" --arg api "$API_IMAGE" \
-            '.webImage = $web | .apiImage = $api' \
-            release/release-metadata.json > "$TMP_METADATA"
-          mv "$TMP_METADATA" release/release-metadata.json
-
-          printf 'WEB_IMAGE=%s\nAPI_IMAGE=%s\n' "$WEB_IMAGE" "$API_IMAGE" >> "$GITHUB_ENV"
+          WEB_REF="$(jq -er '.images.web.reference' release/release.json)"
+          API_REF="$(jq -er '.images.api.reference' release/release.json)"
+          VERSION="$(jq -er '.version' release/release.json)"
+          validate_image_reference "$WEB_REF"
+          validate_image_reference "$API_REF"
+          echo "Pulling ${WEB_REF}"
+          docker pull "$WEB_REF"
+          echo "Pulling ${API_REF}"
+          docker pull "$API_REF"
+          {
+            echo "WEB_IMAGE=${WEB_REF}"
+            echo "API_IMAGE=${API_REF}"
+            echo "VERSION=${VERSION}"
+          } >> "$GITHUB_ENV"
       - name: Resolve staging deploy root
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -126,8 +136,6 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
-          # v2.32.4: `up`/`create` accept --no-build; `run` rejects it (exit 16).
-          # deploy-stack.sh migrations use `run --pull never` for that reason.
           COMPOSE_VERSION: v2.32.4
         run: |
           set -euo pipefail
@@ -165,14 +173,9 @@ jobs:
           USER: ${{ secrets.STAGING_USER }}
         run: |
           set -euo pipefail
-          VERSION="$(jq -er '.version' release/release-metadata.json)"
-          export VERSION
-          export LOCAL_WEB="platform-web:${VERSION}"
-          export LOCAL_API="platform-api:${VERSION}"
           export RELEASE_DIR=release
-          # Separate archives. Saving both image IDs in one stream left the VM
-          # with a single loaded image and no tag for the web config digest.
-          bash scripts/transfer-release-images.sh
+          chmod +x release/transfer-release-images.sh
+          bash release/transfer-release-images.sh
       - name: Deploy Compose stack
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -190,7 +193,8 @@ jobs:
           command -v jq >/dev/null || { echo "jq is required on staging"; exit 1; }
           export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
           export GITHUB_TOKEN="$(printf '%s' "$GITHUB_TOKEN_B64" | base64 -d)"
-          echo "Deploy metadata webImage=$(jq -er '.webImage' "$DEPLOY_ROOT/release-metadata.json")"
+          echo "Deploy release=$(jq -er '.version' "$DEPLOY_ROOT/release.json") commit=$(jq -er '.commit' "$DEPLOY_ROOT/release.json")"
+          echo "Deploy digests web=$(jq -er '.images.web.reference' "$DEPLOY_ROOT/release.json")"
           chmod +x "$DEPLOY_ROOT/deploy-stack.sh" "$DEPLOY_ROOT/rollback-stack.sh" "$DEPLOY_ROOT/health-check.sh"
           "$DEPLOY_ROOT/deploy-stack.sh"
           EOF
