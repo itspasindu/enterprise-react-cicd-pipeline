@@ -30,10 +30,12 @@ APP_PORT="${APP_PORT:-4173}"
 WEB_IMAGE="$(awk -F= '/^WEB_IMAGE=/{print $2; exit}' "$PREVIOUS_ENV")"
 API_IMAGE="$(awk -F= '/^API_IMAGE=/{print $2; exit}' "$PREVIOUS_ENV")"
 
-# Prefer config Ids from the previous release bundle (portable after docker load).
-if [ -f "$PREVIOUS_RELEASE" ] && jq -e '.images.web.imageId' "$PREVIOUS_RELEASE" >/dev/null 2>&1; then
-  WEB_IMAGE="$(jq -er '.images.web.imageId' "$PREVIOUS_RELEASE")"
-  API_IMAGE="$(jq -er '.images.api.imageId' "$PREVIOUS_RELEASE")"
+# Prefer Ids that were actually running (previous.env). Fall back to previous-release.
+if ! [[ "${WEB_IMAGE:-}" =~ ^sha256:[a-f0-9]{64}$ ]] || ! [[ "${API_IMAGE:-}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+  if [ -f "$PREVIOUS_RELEASE" ] && jq -e '.images.web.imageId' "$PREVIOUS_RELEASE" >/dev/null 2>&1; then
+    WEB_IMAGE="$(jq -er '.images.web.imageId' "$PREVIOUS_RELEASE")"
+    API_IMAGE="$(jq -er '.images.api.imageId' "$PREVIOUS_RELEASE")"
+  fi
 fi
 
 is_immutable_runtime_ref() {
@@ -52,8 +54,11 @@ if [ -f "$PREVIOUS_COMPOSE" ]; then
   ROLLBACK_COMPOSE="$PREVIOUS_COMPOSE"
 fi
 
-docker image inspect "$WEB_IMAGE" >/dev/null
-docker image inspect "$API_IMAGE" >/dev/null
+if ! docker image inspect "$WEB_IMAGE" >/dev/null 2>&1 || ! docker image inspect "$API_IMAGE" >/dev/null 2>&1; then
+  echo "WARNING: previous image Ids are not present on this host (${WEB_IMAGE}, ${API_IMAGE})." >&2
+  echo "Rollback skipped; leaving the current stack unchanged." >&2
+  exit 0
+fi
 
 ROLLBACK_ENV="$(mktemp "${DEPLOY_ROOT}/rollback.XXXXXX")"
 trap 'rm -f "$ROLLBACK_ENV"' EXIT

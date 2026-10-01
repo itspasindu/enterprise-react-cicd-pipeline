@@ -43,6 +43,18 @@ API_REF="$(jq -er '.images.api.reference' "$RELEASE_JSON")"
 WEB_IMAGE="$(jq -er '.images.web.imageId' "$RELEASE_JSON")"
 API_IMAGE="$(jq -er '.images.api.imageId' "$RELEASE_JSON")"
 
+# Prefer Ids observed after docker load on this host (config digests may rewrite).
+RUNTIME_IMAGES="${DEPLOY_ROOT}/runtime-images.env"
+if [ -f "$RUNTIME_IMAGES" ]; then
+  RUNTIME_WEB="$(awk -F= '/^WEB_IMAGE=/{print $2; exit}' "$RUNTIME_IMAGES")"
+  RUNTIME_API="$(awk -F= '/^API_IMAGE=/{print $2; exit}' "$RUNTIME_IMAGES")"
+  if [ -n "$RUNTIME_WEB" ] && [ -n "$RUNTIME_API" ]; then
+    WEB_IMAGE="$RUNTIME_WEB"
+    API_IMAGE="$RUNTIME_API"
+    echo "Using runtime image Ids from ${RUNTIME_IMAGES}"
+  fi
+fi
+
 if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
   echo "release.json commit must be a full SHA" >&2
   exit 1
