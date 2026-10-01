@@ -11,6 +11,7 @@ ARG CACHE_BUST=manual
 RUN echo "cache-bust=${CACHE_BUST}" \
   && apk upgrade --no-cache \
   && apk add --no-cache --upgrade 'libexpat>=2.8.5-r0' \
+  && apk list --installed 'libexpat*' | grep -E 'libexpat-2\.(8\.[5-9]|9\.|[1-9][0-9]+\.)' \
   && rm -rf \
     /usr/local/lib/node_modules/npm \
     /usr/local/lib/node_modules/corepack \

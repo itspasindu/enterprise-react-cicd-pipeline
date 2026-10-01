@@ -8,12 +8,14 @@ USER root
 ARG CACHE_BUST=manual
 # Keep OS packages current for Trivy HIGH/CRITICAL gates (e.g. libexpat CVE-2026-93990).
 # Require the fixed package so the build fails closed if Alpine has not published it yet.
+# apk info -v <pkg> prints description metadata, not the versioned package name.
+# Use apk list --installed to assert the fixed libexpat is present.
 RUN echo "cache-bust=${CACHE_BUST}" \
   && apk upgrade --no-cache \
   && apk add --no-cache --upgrade 'libexpat>=2.8.5-r0' \
   && echo "Installed libexpat:" \
-  && apk info -v libexpat \
-  && apk info -v libexpat | grep -E '^libexpat-2\.(8\.[5-9]|9\.|[1-9][0-9]+\.)'
+  && apk list --installed 'libexpat*' \
+  && apk list --installed 'libexpat*' | grep -E 'libexpat-2\.(8\.[5-9]|9\.|[1-9][0-9]+\.)'
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY dist/ /usr/share/nginx/html/
 USER 101
