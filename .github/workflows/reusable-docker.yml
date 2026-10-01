@@ -178,13 +178,21 @@ jobs:
           IMAGE: ${{ steps.meta.outputs.web_image }}
           VERSION: ${{ steps.meta.outputs.version }}
           TAGS: ${{ steps.meta.outputs.web_tags }}
-          BUILT_DIGEST: ${{ steps.web.outputs.digest }}
         run: |
           set -euo pipefail
+          # load:true Buildx digests often differ from the registry manifest digest
+          # after docker push. Prove we push the same local image by Id, then use
+          # RepoDigests as the immutable release reference.
+          LOCAL_ID="$(docker image inspect --format='{{.Id}}' "${IMAGE}:${VERSION}")"
           IFS=',' read -r -a tag_list <<< "$TAGS"
           for tag in "${tag_list[@]}"; do
             docker push "$tag"
           done
+          AFTER_ID="$(docker image inspect --format='{{.Id}}' "${IMAGE}:${VERSION}")"
+          if [ "$LOCAL_ID" != "$AFTER_ID" ]; then
+            echo "Local image Id changed during push (${LOCAL_ID} -> ${AFTER_ID})" >&2
+            exit 1
+          fi
           DIGEST_REF="$(docker inspect --format='{{json .RepoDigests}}' "${IMAGE}:${VERSION}" \
             | jq -r --arg img "$IMAGE" '.[] | select(startswith($img + "@"))' | head -n1)"
           case "$DIGEST_REF" in
@@ -200,10 +208,7 @@ jobs:
             echo "Unexpected digest format: ${DIGEST}" >&2
             exit 1
           fi
-          if [ -n "${BUILT_DIGEST:-}" ] && [ "$DIGEST" != "$BUILT_DIGEST" ]; then
-            echo "Pushed digest (${DIGEST}) does not match built digest (${BUILT_DIGEST})" >&2
-            exit 1
-          fi
+          echo "Pushed ${DIGEST_REF} (local Id ${LOCAL_ID})"
           {
             echo "digest=${DIGEST}"
             echo "digest_ref=${DIGEST_REF}"
@@ -215,13 +220,18 @@ jobs:
           IMAGE: ${{ steps.meta.outputs.api_image }}
           VERSION: ${{ steps.meta.outputs.version }}
           TAGS: ${{ steps.meta.outputs.api_tags }}
-          BUILT_DIGEST: ${{ steps.api.outputs.digest }}
         run: |
           set -euo pipefail
+          LOCAL_ID="$(docker image inspect --format='{{.Id}}' "${IMAGE}:${VERSION}")"
           IFS=',' read -r -a tag_list <<< "$TAGS"
           for tag in "${tag_list[@]}"; do
             docker push "$tag"
           done
+          AFTER_ID="$(docker image inspect --format='{{.Id}}' "${IMAGE}:${VERSION}")"
+          if [ "$LOCAL_ID" != "$AFTER_ID" ]; then
+            echo "Local image Id changed during push (${LOCAL_ID} -> ${AFTER_ID})" >&2
+            exit 1
+          fi
           DIGEST_REF="$(docker inspect --format='{{json .RepoDigests}}' "${IMAGE}:${VERSION}" \
             | jq -r --arg img "$IMAGE" '.[] | select(startswith($img + "@"))' | head -n1)"
           case "$DIGEST_REF" in
@@ -237,10 +247,7 @@ jobs:
             echo "Unexpected digest format: ${DIGEST}" >&2
             exit 1
           fi
-          if [ -n "${BUILT_DIGEST:-}" ] && [ "$DIGEST" != "$BUILT_DIGEST" ]; then
-            echo "Pushed digest (${DIGEST}) does not match built digest (${BUILT_DIGEST})" >&2
-            exit 1
-          fi
+          echo "Pushed ${DIGEST_REF} (local Id ${LOCAL_ID})"
           {
             echo "digest=${DIGEST}"
             echo "digest_ref=${DIGEST_REF}"
