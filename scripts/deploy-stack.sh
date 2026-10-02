@@ -170,6 +170,19 @@ echo "Running full-stack health checks..."
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/ready" >/dev/null
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/" >/dev/null
 
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  echo "Probing GitHub API egress from the API container..."
+  if ! docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" exec -T api \
+    wget -qO- --timeout=10 https://api.github.com/zen >/dev/null; then
+    echo "ERROR: API container cannot reach https://api.github.com (DNS/egress)." >&2
+    echo "Check that the API is on the egress network and the VM allows outbound DNS/HTTPS." >&2
+    docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" exec -T api \
+      sh -ec 'cat /etc/resolv.conf; wget -S -O- --timeout=10 https://api.github.com/zen || true' >&2 || true
+    exit 1
+  fi
+  echo "GitHub API egress: OK"
+fi
+
 mv "$NEXT_ENV" "$CURRENT_ENV"
 trap - EXIT
 echo "Release ${VERSION} (commit ${COMMIT}) deployed successfully."

@@ -11,6 +11,19 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
   const baseUrl = 'https://api.github.com'
   const repoPath = `/repos/${owner}/${repo}`
 
+  function isTransientNetworkError(error) {
+    const code = error?.cause?.code || error?.code || ''
+    const message = error?.message || ''
+    return (
+      code === 'EAI_AGAIN' ||
+      code === 'ENOTFOUND' ||
+      code === 'ECONNRESET' ||
+      code === 'ETIMEDOUT' ||
+      code === 'UND_ERR_CONNECT_TIMEOUT' ||
+      /EAI_AGAIN|ENOTFOUND|ECONNRESET|ETIMEDOUT/i.test(message)
+    )
+  }
+
   async function request(path, { searchParams, method = 'GET' } = {}) {
     const url = new URL(path.startsWith('http') ? path : `${baseUrl}${path}`)
     if (searchParams) {
@@ -21,22 +34,30 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
       }
     }
 
+    const maxAttempts = 3
     let response
-    try {
-      response = await fetchImpl(url, {
-        method,
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${token}`,
-          'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'platform-api-pipeline-monitor',
-        },
-      })
-    } catch (error) {
-      throw new GithubApiError(
-        `GitHub API unreachable (${error?.cause?.code || error?.code || error?.message || 'network error'})`,
-        { status: 502 }
-      )
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        response = await fetchImpl(url, {
+          method,
+          headers: {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'platform-api-pipeline-monitor',
+          },
+        })
+        break
+      } catch (error) {
+        if (attempt < maxAttempts && isTransientNetworkError(error)) {
+          await new Promise(resolve => setTimeout(resolve, 250 * attempt))
+          continue
+        }
+        throw new GithubApiError(
+          `GitHub API unreachable (${error?.cause?.code || error?.code || error?.message || 'network error'})`,
+          { status: 502 }
+        )
+      }
     }
 
     const text = await response.text()
