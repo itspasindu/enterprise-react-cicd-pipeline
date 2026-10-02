@@ -60,8 +60,10 @@ function PipelineStaging() {
                 {!data.healthy ? (
                   <>
                     {' '}
-                    — start the Compose stack on that origin, or set <code className="rounded bg-slate-100 px-1">STAGING_URL</code> in
-                    the API env to a reachable site (local Vite is usually <code className="rounded bg-slate-100 px-1">http://localhost:3000</code>).
+                    — start the Compose stack on that origin, or set{' '}
+                    <code className="rounded bg-slate-100 px-1">STAGING_URL</code> in the API env to
+                    a reachable site (local Vite is usually{' '}
+                    <code className="rounded bg-slate-100 px-1">http://localhost:3000</code>).
                   </>
                 ) : null}
               </p>
@@ -79,7 +81,11 @@ function PipelineStaging() {
                     </p>
                     <p className="text-xs text-slate-500">
                       {check.ok ? 'Responded' : 'Did not respond'} · {check.latencyMs}ms
-                      {check.error ? ` · ${check.error}` : check.status ? ` · HTTP ${check.status}` : ''}
+                      {check.error
+                        ? ` · ${check.error}`
+                        : check.status
+                          ? ` · HTTP ${check.status}`
+                          : ''}
                     </p>
                   </div>
                   <StatusBadge status={check.ok ? 'success' : 'failure'} />
