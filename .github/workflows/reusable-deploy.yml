@@ -226,5 +226,18 @@ jobs:
           STATUS="$(curl --fail --show-error --silent "http://${HOST}:4173/api/pipelines/status")"
           echo "$STATUS" | jq -e '.configured == true' >/dev/null
           echo "/api/pipelines/status: configured"
-          curl --fail --show-error --silent "http://${HOST}:4173/api/pipelines/overview" >/dev/null
+          OVERVIEW_BODY="$(mktemp)"
+          OVERVIEW_CODE="$(
+            curl --show-error --silent --max-time 60 \
+              -o "$OVERVIEW_BODY" -w '%{http_code}' \
+              "http://${HOST}:4173/api/pipelines/overview" || true
+          )"
+          if [ "$OVERVIEW_CODE" != "200" ]; then
+            echo "::error::/api/pipelines/overview returned HTTP ${OVERVIEW_CODE}"
+            echo "Body:"
+            head -c 2000 "$OVERVIEW_BODY" || true
+            echo
+            echo "Common causes: PIPELINE_GITHUB_TOKEN missing actions:read (and ideally issues:read), or API egress to api.github.com blocked."
+            exit 1
+          fi
           echo "/api/pipelines/overview: OK"
