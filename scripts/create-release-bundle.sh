@@ -88,7 +88,10 @@ cp "${ROOT}/scripts/deploy-stack.sh" \
   "${ROOT}/scripts/health-check.sh" \
   "${ROOT}/scripts/transfer-release-images.sh" \
   "${OUT}/"
-cp "${ROOT}/scripts/lib/image-archive.sh" "${ROOT}/scripts/lib/validate-image-ref.sh" "${OUT}/lib/"
+cp "${ROOT}/scripts/lib/image-archive.sh" \
+  "${ROOT}/scripts/lib/validate-image-ref.sh" \
+  "${ROOT}/scripts/lib/compose-egress.sh" \
+  "${OUT}/lib/"
 
 for sbom in web-sbom.cyclonedx.json api-sbom.cyclonedx.json; do
   if [ -f "${ROOT}/${sbom}" ]; then

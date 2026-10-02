@@ -64,10 +64,11 @@ jobs:
           chmod a-w release/release.json release/checksums.txt release/compose.yml \
             release/deploy-stack.sh release/rollback-stack.sh release/health-check.sh \
             release/transfer-release-images.sh release/lib/image-archive.sh \
-            release/lib/validate-image-ref.sh 2>/dev/null || true
+            release/lib/validate-image-ref.sh release/lib/compose-egress.sh 2>/dev/null || true
           echo "Release $(jq -r .version release/release.json) commit=$(jq -r .commit release/release.json)"
           echo "Deploy digests web=${WEB_REF} api=${API_REF}"
           echo "Runtime Ids web=${WEB_ID} api=${API_ID}"
+          test -f release/lib/compose-egress.sh
       - name: Require pipeline monitor token
         env:
           PIPELINE_GITHUB_TOKEN: ${{ secrets.PIPELINE_GITHUB_TOKEN }}
@@ -204,14 +205,23 @@ jobs:
         run: |
           PASSWORD_B64="$(printf '%s' "$POSTGRES_PASSWORD" | base64 -w 0)"
           TOKEN_B64="$(printf '%s' "$PIPELINE_GITHUB_TOKEN" | base64 -w 0)"
+          # Resolve on the runner — staging VM DNS inside containers often fails (EAI_AGAIN).
+          GITHUB_API_IP="$(getent ahostsv4 api.github.com | awk '{print $1; exit}')"
+          if [[ ! "$GITHUB_API_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Runner could not resolve api.github.com to IPv4"
+            exit 1
+          fi
+          echo "api.github.com -> ${GITHUB_API_IP} (for staging Compose extra_hosts)"
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            "${USER}@${HOST}" "DEPLOY_ROOT=${DEPLOY_ROOT} POSTGRES_PASSWORD_B64=${PASSWORD_B64} GITHUB_TOKEN_B64=${TOKEN_B64} GITHUB_OWNER=${GITHUB_OWNER} GITHUB_REPO=${GITHUB_REPO} bash -s" <<'EOF'
+            "${USER}@${HOST}" "DEPLOY_ROOT=${DEPLOY_ROOT} POSTGRES_PASSWORD_B64=${PASSWORD_B64} GITHUB_TOKEN_B64=${TOKEN_B64} GITHUB_OWNER=${GITHUB_OWNER} GITHUB_REPO=${GITHUB_REPO} GITHUB_API_IP=${GITHUB_API_IP} bash -s" <<'EOF'
           set -euo pipefail
           command -v jq >/dev/null || { echo "jq is required on staging"; exit 1; }
           export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
           export GITHUB_TOKEN="$(printf '%s' "$GITHUB_TOKEN_B64" | base64 -d)"
+          export GITHUB_API_IP
           echo "Deploy release=$(jq -er '.version' "$DEPLOY_ROOT/release.json") commit=$(jq -er '.commit' "$DEPLOY_ROOT/release.json")"
           echo "Deploy digests web=$(jq -er '.images.web.reference' "$DEPLOY_ROOT/release.json")"
+          echo "GitHub API IP for extra_hosts=${GITHUB_API_IP}"
           chmod +x "$DEPLOY_ROOT/deploy-stack.sh" "$DEPLOY_ROOT/rollback-stack.sh" "$DEPLOY_ROOT/health-check.sh"
           "$DEPLOY_ROOT/deploy-stack.sh"
           EOF
