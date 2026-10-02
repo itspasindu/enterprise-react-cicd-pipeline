@@ -50,7 +50,14 @@ services:
     cap_drop: [ALL]
     # backend: talk to Postgres. egress: HTTPS to api.github.com for the live
     # pipeline monitor (backend is internal:true and has no outbound path).
-    networks: [backend, egress]
+    # Explicit public DNS avoids EAI_AGAIN when the host resolver/Docker
+    # embedded DNS is flaky on dual-homed (internal + egress) containers.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    networks:
+      backend:
+      egress:
     deploy:
       resources:
         limits:

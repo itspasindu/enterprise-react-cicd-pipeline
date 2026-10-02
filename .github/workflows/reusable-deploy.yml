@@ -237,7 +237,10 @@ jobs:
             echo "Body:"
             head -c 2000 "$OVERVIEW_BODY" || true
             echo
-            echo "Common causes: PIPELINE_GITHUB_TOKEN missing actions:read (and ideally issues:read), or API egress to api.github.com blocked."
+            echo "Common causes:"
+            echo "  - API container DNS/egress cannot resolve api.github.com (EAI_AGAIN)"
+            echo "  - PIPELINE_GITHUB_TOKEN missing actions:read (and ideally issues:read)"
+            echo "  - Host outbound HTTPS blocked"
             exit 1
           fi
           echo "/api/pipelines/overview: OK"
