@@ -3,6 +3,7 @@ set -euo pipefail
 
 DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/platform}"
 COMPOSE_FILE="${DEPLOY_ROOT}/compose.yml"
+EGRESS_OVERRIDE="${DEPLOY_ROOT}/compose.egress.yml"
 PREVIOUS_COMPOSE="${DEPLOY_ROOT}/previous-compose.yml"
 CURRENT_ENV="${DEPLOY_ROOT}/current.env"
 PREVIOUS_ENV="${DEPLOY_ROOT}/previous.env"
@@ -95,14 +96,23 @@ free_host_port() {
 echo "Rolling application containers back to previous immutable image Ids..."
 echo "  web=${WEB_IMAGE}"
 echo "  api=${API_IMAGE}"
-docker compose --env-file "$ROLLBACK_ENV" -f "$ROLLBACK_COMPOSE" up -d postgres --wait
-docker compose --env-file "$ROLLBACK_ENV" -f "$ROLLBACK_COMPOSE" stop web >/dev/null 2>&1 || true
-docker compose --env-file "$ROLLBACK_ENV" -f "$ROLLBACK_COMPOSE" rm -f web >/dev/null 2>&1 || true
+COMPOSE_ARGS=(-f "$ROLLBACK_COMPOSE")
+if [ -f "$EGRESS_OVERRIDE" ]; then
+  COMPOSE_ARGS+=(-f "$EGRESS_OVERRIDE")
+fi
+docker compose --env-file "$ROLLBACK_ENV" "${COMPOSE_ARGS[@]}" up -d postgres --wait
+docker compose --env-file "$ROLLBACK_ENV" "${COMPOSE_ARGS[@]}" stop web >/dev/null 2>&1 || true
+docker compose --env-file "$ROLLBACK_ENV" "${COMPOSE_ARGS[@]}" rm -f web >/dev/null 2>&1 || true
 free_host_port "$APP_PORT"
-docker compose --env-file "$ROLLBACK_ENV" -f "$ROLLBACK_COMPOSE" up -d api web --wait --remove-orphans --no-build --pull never
+docker compose --env-file "$ROLLBACK_ENV" "${COMPOSE_ARGS[@]}" up -d api web --wait --remove-orphans --no-build --pull never
 
-verify_running_service_id "$ROLLBACK_COMPOSE" "$ROLLBACK_ENV" web "$WEB_IMAGE"
-verify_running_service_id "$ROLLBACK_COMPOSE" "$ROLLBACK_ENV" api "$API_IMAGE"
+if [ -f "$EGRESS_OVERRIDE" ]; then
+  verify_running_service_id "$ROLLBACK_COMPOSE" "$ROLLBACK_ENV" web "$WEB_IMAGE" "$EGRESS_OVERRIDE"
+  verify_running_service_id "$ROLLBACK_COMPOSE" "$ROLLBACK_ENV" api "$API_IMAGE" "$EGRESS_OVERRIDE"
+else
+  verify_running_service_id "$ROLLBACK_COMPOSE" "$ROLLBACK_ENV" web "$WEB_IMAGE"
+  verify_running_service_id "$ROLLBACK_COMPOSE" "$ROLLBACK_ENV" api "$API_IMAGE"
+fi
 
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/ready" >/dev/null
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/" >/dev/null

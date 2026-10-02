@@ -64,11 +64,16 @@ verify_running_service_id() {
   local env_file="$2"
   local service="$3"
   local expected_id="$4"
+  local extra_compose="${5:-}"
   local cid=""
   local running_id=""
+  local -a compose_args=(-f "$compose_file")
 
   validate_image_id "$expected_id" || return 1
-  cid="$(docker compose --env-file "$env_file" -f "$compose_file" ps -q "$service" 2>/dev/null | head -n1)"
+  if [ -n "$extra_compose" ]; then
+    compose_args+=(-f "$extra_compose")
+  fi
+  cid="$(docker compose --env-file "$env_file" "${compose_args[@]}" ps -q "$service" 2>/dev/null | head -n1)"
   if [ -z "$cid" ]; then
     echo "ERROR: No running container for service ${service}" >&2
     return 1

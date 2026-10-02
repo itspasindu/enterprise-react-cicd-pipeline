@@ -84,6 +84,7 @@ replay_compose_line() {
     token="${token//\$ROLLBACK_ENV/$ENV_FILE}"
     token="${token//\$COMPOSE_FILE/$MISSING_YML}"
     token="${token//\$ROLLBACK_COMPOSE/$MISSING_YML}"
+    token="${token//\$EGRESS_OVERRIDE/$MISSING_YML}"
     args+=("$token")
   done
 

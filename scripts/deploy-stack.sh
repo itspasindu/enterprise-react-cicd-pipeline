@@ -3,6 +3,7 @@ set -euo pipefail
 
 DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/platform}"
 COMPOSE_FILE="${DEPLOY_ROOT}/compose.yml"
+EGRESS_OVERRIDE="${DEPLOY_ROOT}/compose.egress.yml"
 RELEASE_JSON="${DEPLOY_ROOT}/release.json"
 CURRENT_ENV="${DEPLOY_ROOT}/current.env"
 PREVIOUS_ENV="${DEPLOY_ROOT}/previous.env"
@@ -14,6 +15,8 @@ APP_PORT="${APP_PORT:-4173}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/validate-image-ref.sh
 source "${SCRIPT_DIR}/lib/validate-image-ref.sh"
+# shellcheck source=lib/compose-egress.sh
+source "${SCRIPT_DIR}/lib/compose-egress.sh"
 
 command -v docker >/dev/null || { echo "Docker is required"; exit 1; }
 if ! docker compose version >/dev/null 2>&1; then
@@ -119,6 +122,8 @@ if [ -f "$CURRENT_ENV" ]; then
   cp "$CURRENT_ENV" "$PREVIOUS_ENV"
 fi
 
+write_compose_egress_override "$DEPLOY_ROOT"
+
 NEXT_ENV="$(mktemp "${DEPLOY_ROOT}/release.XXXXXX")"
 trap 'rm -f "$NEXT_ENV"' EXIT
 cat > "$NEXT_ENV" <<EOF
@@ -139,32 +144,37 @@ GITHUB_REPO=${GITHUB_REPO:-}
 EOF
 chmod 600 "$NEXT_ENV"
 
+compose() {
+  docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" -f "$EGRESS_OVERRIDE" "$@"
+}
+
 if [ -z "${GITHUB_TOKEN:-}" ] || [ -z "${GITHUB_OWNER:-}" ] || [ -z "${GITHUB_REPO:-}" ]; then
   echo "WARNING: GITHUB_TOKEN/OWNER/REPO incomplete — /api/pipelines/* (except status) will return 503" >&2
 fi
 
 echo "Starting PostgreSQL for release ${VERSION} (commit ${COMMIT})..."
-docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d postgres --wait
+docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" -f "$EGRESS_OVERRIDE" up -d postgres --wait
 
 echo "Applying forward-only database migrations..."
-docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" run --rm --pull never api node src/migrate.js
+docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" -f "$EGRESS_OVERRIDE" run --rm --pull never api node src/migrate.js
 
 echo "Deploying API and web by immutable image Id (from GHCR digests)..."
 echo "  web ref=${WEB_REF}"
 echo "  web id =${WEB_IMAGE}"
 echo "  api ref=${API_REF}"
 echo "  api id =${API_IMAGE}"
-docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" stop web >/dev/null 2>&1 || true
-docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" rm -f web >/dev/null 2>&1 || true
+docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" -f "$EGRESS_OVERRIDE" stop web >/dev/null 2>&1 || true
+docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" -f "$EGRESS_OVERRIDE" rm -f web >/dev/null 2>&1 || true
 free_host_port "$APP_PORT"
-if ! docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build --pull never; then
+# Force-recreate API so dns/extra_hosts from compose.egress.yml always apply.
+if ! docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" -f "$EGRESS_OVERRIDE" up -d api web --wait --remove-orphans --no-build --pull never --force-recreate; then
   echo "Compose up failed; freeing port ${APP_PORT} and retrying once" >&2
   free_host_port "$APP_PORT"
-  docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" up -d api web --wait --remove-orphans --no-build --pull never
+  docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" -f "$EGRESS_OVERRIDE" up -d api web --wait --remove-orphans --no-build --pull never --force-recreate
 fi
 
-verify_running_service_id "$COMPOSE_FILE" "$NEXT_ENV" web "$WEB_IMAGE"
-verify_running_service_id "$COMPOSE_FILE" "$NEXT_ENV" api "$API_IMAGE"
+verify_running_service_id "$COMPOSE_FILE" "$NEXT_ENV" web "$WEB_IMAGE" "$EGRESS_OVERRIDE"
+verify_running_service_id "$COMPOSE_FILE" "$NEXT_ENV" api "$API_IMAGE" "$EGRESS_OVERRIDE"
 
 echo "Running full-stack health checks..."
 curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/ready" >/dev/null
@@ -172,12 +182,12 @@ curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/" >/dev/null
 
 if [ -n "${GITHUB_TOKEN:-}" ]; then
   echo "Probing GitHub API egress from the API container..."
-  if ! docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" exec -T api \
+  if ! docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" -f "$EGRESS_OVERRIDE" exec -T api \
     wget -qO- --timeout=10 https://api.github.com/zen >/dev/null; then
     echo "ERROR: API container cannot reach https://api.github.com (DNS/egress)." >&2
-    echo "Check that the API is on the egress network and the VM allows outbound DNS/HTTPS." >&2
-    docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" exec -T api \
-      sh -ec 'cat /etc/resolv.conf; wget -S -O- --timeout=10 https://api.github.com/zen || true' >&2 || true
+    echo "Check that the API is on the egress network and the VM allows outbound HTTPS." >&2
+    docker compose --env-file "$NEXT_ENV" -f "$COMPOSE_FILE" -f "$EGRESS_OVERRIDE" exec -T api \
+      sh -ec 'cat /etc/resolv.conf; getent hosts api.github.com || true; wget -S -O- --timeout=10 https://api.github.com/zen || true' >&2 || true
     exit 1
   fi
   echo "GitHub API egress: OK"
