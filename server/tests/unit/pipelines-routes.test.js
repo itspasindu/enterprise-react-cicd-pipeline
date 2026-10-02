@@ -140,5 +140,93 @@ describe('pipelines API', () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  it('returns overview when issues:read is missing but actions:read works', async () => {
+    const fetchImpl = vi.fn(async url => {
+      const href = String(url)
+      if (href.includes('/actions/workflows/ci.yml/runs')) {
+        return {
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              workflow_runs: [
+                {
+                  id: 100,
+                  name: 'CI',
+                  path: '.github/workflows/ci.yml',
+                  status: 'completed',
+                  conclusion: 'success',
+                  event: 'push',
+                  head_branch: 'main',
+                  head_sha: 'abc1234567890',
+                  html_url: 'https://github.com/acme/platform/actions/runs/100',
+                  created_at: '2026-01-01T00:00:00Z',
+                  updated_at: '2026-01-01T00:05:00Z',
+                  run_started_at: '2026-01-01T00:00:00Z',
+                  actor: { login: 'alice' },
+                },
+              ],
+            }),
+        }
+      }
+      if (href.includes('/actions/workflows/cd.yml/runs')) {
+        return { ok: true, text: async () => JSON.stringify({ workflow_runs: [] }) }
+      }
+      if (href.includes('/actions/runs/100/jobs')) {
+        return { ok: true, text: async () => JSON.stringify({ jobs: [] }) }
+      }
+      if (href.includes('/actions/runs/100/artifacts')) {
+        return { ok: true, text: async () => JSON.stringify({ artifacts: [] }) }
+      }
+      if (href.includes('/actions/runs/100')) {
+        return {
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              id: 100,
+              name: 'CI',
+              path: '.github/workflows/ci.yml',
+              status: 'completed',
+              conclusion: 'success',
+              event: 'push',
+              head_branch: 'main',
+              head_sha: 'abc1234567890',
+              html_url: 'https://github.com/acme/platform/actions/runs/100',
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:05:00Z',
+              actor: { login: 'alice' },
+            }),
+        }
+      }
+      if (href.includes('/issues')) {
+        return {
+          ok: false,
+          status: 403,
+          text: async () => JSON.stringify({ message: 'Resource not accessible by personal access token' }),
+        }
+      }
+      return { ok: true, status: 200, text: async () => '{}' }
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = fetchImpl
+    try {
+      const app = createApp({
+        pool: { query: vi.fn() },
+        config: baseConfig({
+          githubToken: 'ghp_test',
+          githubOwner: 'acme',
+          githubRepo: 'platform',
+        }),
+      })
+      const response = await request(app).get('/api/pipelines/overview')
+      expect(response.status).toBe(200)
+      expect(response.body.latestCi).toMatchObject({ id: 100 })
+      expect(response.body.openFailureCount).toBe(0)
+      expect(response.body.recentFailures).toEqual([])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 

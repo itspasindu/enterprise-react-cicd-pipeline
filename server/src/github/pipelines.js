@@ -1,4 +1,6 @@
 /** Stage keys aligned with scripts/lib/ci-report-lib.sh */
+import { GithubApiError } from './client.js'
+
 export const STAGE_DEFINITIONS = [
   { key: 'full-stack-tests', name: 'Full-Stack Tests', jobNames: ['Test Full Stack'] },
   { key: 'security-scan', name: 'Security Analysis', jobNames: ['Security Full Stack'] },
@@ -301,11 +303,38 @@ export function createPipelineService({ github, cache, stagingUrl, probeFn }) {
 
   async function getOverview() {
     return cached('overview', async () => {
-      const [{ runs }, failures, staging] = await Promise.all([
+      // Degrade instead of failing the whole board when one GitHub call fails
+      // (missing issues:read, transient egress, rate limit, etc.).
+      const [runsResult, failuresResult, stagingResult] = await Promise.allSettled([
         listRuns({ perPage: 10, page: 1 }),
-        listFailures({ perPage: 10, page: 1 }),
+        listFailures({ perPage: 10, page: 1 }).catch(error => {
+          if (error instanceof GithubApiError && (error.status === 403 || error.status === 404)) {
+            return { failures: [], page: 1, perPage: 10, count: 0 }
+          }
+          throw error
+        }),
         getStagingHealth(),
       ])
+
+      if (runsResult.status === 'rejected') {
+        throw runsResult.reason
+      }
+
+      const runs = runsResult.value.runs
+      const failures =
+        failuresResult.status === 'fulfilled'
+          ? failuresResult.value
+          : { failures: [], page: 1, perPage: 10, count: 0 }
+      const staging =
+        stagingResult.status === 'fulfilled'
+          ? stagingResult.value
+          : {
+              baseUrl: stagingUrl,
+              healthy: false,
+              ready: false,
+              checks: [],
+              checkedAt: new Date().toISOString(),
+            }
 
       const latestCi = runs.find(run => run.workflow === 'ci') || null
       const latestCd = runs.find(run => run.workflow === 'cd') || null
