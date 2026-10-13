@@ -10,11 +10,36 @@ function emptyToNull(value) {
   return text
 }
 
-function extractSection(body, heading) {
-  if (!body) return null
-  const pattern = new RegExp(`###\\s+${heading}\\s*\\n([\\s\\S]*?)(?=\\n###\\s+|\\n##\\s+|$)`, 'i')
-  const match = body.match(pattern)
+function headingText(line) {
+  const match = line.match(/^###\s+(.*)$/)
   return match ? match[1].trim() : null
+}
+
+function extractSection(body, matchesHeading) {
+  if (!body) return null
+  const lines = body.split('\n')
+  const headingIndex = lines.findIndex(line => {
+    const title = headingText(line)
+    return Boolean(title && matchesHeading(title))
+  })
+  if (headingIndex === -1) return null
+
+  const content = []
+  for (const line of lines.slice(headingIndex + 1)) {
+    if (/^###\s+/.test(line) || /^##\s+/.test(line)) break
+    content.push(line)
+  }
+  return content.join('\n').trim() || null
+}
+
+function headingEquals(expected) {
+  const lower = expected.toLowerCase()
+  return title => title.toLowerCase() === lower
+}
+
+function headingStartsWith(prefix) {
+  const lower = prefix.toLowerCase()
+  return title => title.toLowerCase().startsWith(lower)
 }
 
 function parseMarkdownTable(section) {
@@ -115,6 +140,13 @@ function parseReproduceBlock(section) {
   return match ? match[1].trim() : section.trim()
 }
 
+function findReproduceSection(body) {
+  const fromHeading = extractSection(body, headingStartsWith('Reproduce locally'))
+  if (fromHeading) return fromHeading
+  const match = body.match(/###\s+Reproduce locally[\s\S]*?```(?:bash)?\n([\s\S]*?)```/)
+  return match ? match[0] : null
+}
+
 export function parseFailureReport(body) {
   if (!body || typeof body !== 'string') {
     return {
@@ -130,17 +162,17 @@ export function parseFailureReport(body) {
   }
 
   const hasStructuredReport = /##\s+Pipeline failure report/i.test(body)
-  const summarySection = extractSection(body, 'Summary')
-  const checklistSection = extractSection(body, 'Failed stages \\(resolution checklist\\)')
-  const stagesSection = extractSection(body, 'All stage results')
-  const investigationSection = extractSection(body, 'Investigation guide')
-  const reproduceSection =
-    extractSection(body, 'Reproduce locally[^\n]*') ||
-    body.match(/###\s+Reproduce locally[\s\S]*?```(?:bash)?\n([\s\S]*?)```/)?.[0] ||
-    null
+  const summarySection = extractSection(body, headingEquals('Summary'))
+  const checklistSection = extractSection(
+    body,
+    headingEquals('Failed stages (resolution checklist)')
+  )
+  const stagesSection = extractSection(body, headingEquals('All stage results'))
+  const investigationSection = extractSection(body, headingEquals('Investigation guide'))
+  const reproduceSection = findReproduceSection(body)
   const fixPathSection =
-    extractSection(body, 'Developer fix path[^\n]*') ||
-    extractSection(body, 'How to fix \\(pull request\\)')
+    extractSection(body, headingStartsWith('Developer fix path')) ||
+    extractSection(body, headingEquals('How to fix (pull request)'))
 
   return {
     hasStructuredReport,
