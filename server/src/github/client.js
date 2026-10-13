@@ -24,7 +24,7 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
     )
   }
 
-  async function request(path, { searchParams, method = 'GET' } = {}) {
+  async function request(path, { searchParams, method = 'GET', accept, raw = false } = {}) {
     const url = new URL(path.startsWith('http') ? path : `${baseUrl}${path}`)
     if (searchParams) {
       for (const [key, value] of Object.entries(searchParams)) {
@@ -41,11 +41,12 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
         response = await fetchImpl(url, {
           method,
           headers: {
-            Accept: 'application/vnd.github+json',
+            Accept: accept || 'application/vnd.github+json',
             Authorization: `Bearer ${token}`,
             'X-GitHub-Api-Version': '2022-11-28',
             'User-Agent': 'platform-api-pipeline-monitor',
           },
+          redirect: 'follow',
         })
         break
       } catch (error) {
@@ -58,6 +59,25 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
           { status: 502 }
         )
       }
+    }
+
+    if (raw) {
+      if (!response.ok) {
+        const text = await response.text()
+        let body = text
+        try {
+          body = JSON.parse(text)
+        } catch {
+          // keep text
+        }
+        const message =
+          typeof body === 'object' && body?.message
+            ? body.message
+            : `GitHub API error (${response.status})`
+        throw new GithubApiError(message, { status: response.status, body })
+      }
+      const arrayBuffer = await response.arrayBuffer()
+      return Buffer.from(arrayBuffer)
     }
 
     const text = await response.text()
@@ -87,7 +107,15 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
     get(path, options) {
       return request(path, options)
     },
-    listWorkflowRuns({ workflow, perPage = 20, page = 1, status, branch } = {}) {
+    listWorkflowRuns({
+      workflow,
+      perPage = 20,
+      page = 1,
+      status,
+      branch,
+      actor,
+      created,
+    } = {}) {
       const path = workflow
         ? `${repoPath}/actions/workflows/${workflow}/runs`
         : `${repoPath}/actions/runs`
@@ -97,6 +125,8 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
           page,
           status,
           branch,
+          actor,
+          created,
         },
       })
     },
@@ -105,12 +135,26 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
     },
     listJobsForRun(runId) {
       return request(`${repoPath}/actions/runs/${runId}/jobs`, {
-        searchParams: { per_page: 100 },
+        searchParams: { filter: 'latest', per_page: 100 },
       })
     },
     listArtifactsForRun(runId) {
       return request(`${repoPath}/actions/runs/${runId}/artifacts`, {
         searchParams: { per_page: 100 },
+      })
+    },
+    downloadArtifactZip(artifactId) {
+      return request(`${repoPath}/actions/artifacts/${artifactId}/zip`, {
+        accept: 'application/vnd.github+json',
+        raw: true,
+      })
+    },
+    getIssue(issueNumber) {
+      return request(`${repoPath}/issues/${issueNumber}`)
+    },
+    listIssueComments(issueNumber, { perPage = 30, page = 1 } = {}) {
+      return request(`${repoPath}/issues/${issueNumber}/comments`, {
+        searchParams: { per_page: perPage, page },
       })
     },
     listIssues({ labels, state = 'open', perPage = 30, page = 1 } = {}) {

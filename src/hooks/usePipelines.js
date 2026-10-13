@@ -1,5 +1,6 @@
 import { useQuery } from 'react-query'
 import api from '@utils/api'
+import { usePipelineRefresh } from './usePipelineRefresh'
 
 function isSetupError(error) {
   return error?.response?.status === 503 && Boolean(error?.response?.data?.hint)
@@ -61,18 +62,30 @@ function liveInterval(data, idleMs = 45_000, activeMs = 10_000) {
   return hasInProgress(runs) ? activeMs : idleMs
 }
 
+function useControlledRefetchInterval(data, idleMs, activeMs) {
+  const { paused, interval } = usePipelineRefresh()
+  if (paused) return false
+  if (interval && interval !== 'auto') {
+    const ms = Number(interval)
+    return Number.isFinite(ms) && ms > 0 ? ms : idleMs
+  }
+  return liveInterval(data, idleMs, activeMs)
+}
+
 export function usePipelineStatus() {
+  const refetchInterval = useControlledRefetchInterval(null, 60_000, 60_000)
   return useQuery(
     ['pipelines', 'status'],
     async () => {
       const { data } = await api.get('/pipelines/status')
       return data
     },
-    { retry: 2, retryDelay: 1500, staleTime: 60_000, refetchInterval: 60_000 }
+    { retry: 2, retryDelay: 1500, staleTime: 60_000, refetchInterval }
   )
 }
 
 export function usePipelineOverview({ enabled = true } = {}) {
+  const { paused, interval } = usePipelineRefresh()
   return useQuery(
     ['pipelines', 'overview'],
     async () => {
@@ -83,18 +96,51 @@ export function usePipelineOverview({ enabled = true } = {}) {
       enabled,
       retry: false,
       staleTime: 10_000,
-      refetchInterval: data => liveInterval(data),
+      refetchInterval: data => {
+        if (paused) return false
+        if (interval && interval !== 'auto') {
+          const ms = Number(interval)
+          return Number.isFinite(ms) && ms > 0 ? ms : 45_000
+        }
+        return liveInterval(data, 45_000, 10_000)
+      },
       refetchIntervalInBackground: false,
     }
   )
 }
 
-export function usePipelineRuns({ workflow, page = 1, enabled = true } = {}) {
+export function usePipelineRuns({
+  workflow,
+  page = 1,
+  branch,
+  actor,
+  status,
+  since,
+  enabled = true,
+} = {}) {
+  const { paused, interval } = usePipelineRefresh()
   return useQuery(
-    ['pipelines', 'runs', workflow || 'all', page],
+    [
+      'pipelines',
+      'runs',
+      workflow || 'all',
+      page,
+      branch || '',
+      actor || '',
+      status || '',
+      since || '',
+    ],
     async () => {
       const { data } = await api.get('/pipelines/runs', {
-        params: { workflow: workflow || undefined, page, perPage: 20 },
+        params: {
+          workflow: workflow || undefined,
+          page,
+          perPage: 20,
+          branch: branch || undefined,
+          actor: actor || undefined,
+          status: status || undefined,
+          since: since || undefined,
+        },
       })
       return data
     },
@@ -103,12 +149,20 @@ export function usePipelineRuns({ workflow, page = 1, enabled = true } = {}) {
       retry: false,
       staleTime: 10_000,
       keepPreviousData: true,
-      refetchInterval: data => liveInterval(data),
+      refetchInterval: data => {
+        if (paused) return false
+        if (interval && interval !== 'auto') {
+          const ms = Number(interval)
+          return Number.isFinite(ms) && ms > 0 ? ms : 45_000
+        }
+        return liveInterval(data, 45_000, 10_000)
+      },
     }
   )
 }
 
 export function usePipelineRun(runId) {
+  const { paused, interval } = usePipelineRefresh()
   return useQuery(
     ['pipelines', 'run', runId],
     async () => {
@@ -119,7 +173,14 @@ export function usePipelineRun(runId) {
       enabled: Boolean(runId),
       retry: false,
       staleTime: 8_000,
-      refetchInterval: data => liveInterval(data, 30_000, 8_000),
+      refetchInterval: data => {
+        if (paused) return false
+        if (interval && interval !== 'auto') {
+          const ms = Number(interval)
+          return Number.isFinite(ms) && ms > 0 ? ms : 30_000
+        }
+        return liveInterval(data, 30_000, 8_000)
+      },
     }
   )
 }
@@ -136,24 +197,41 @@ export function usePipelineArtifacts(runId) {
 }
 
 export function usePipelineFailures({ enabled = true } = {}) {
+  const refetchInterval = useControlledRefetchInterval(null, 60_000, 60_000)
   return useQuery(
     ['pipelines', 'failures'],
     async () => {
       const { data } = await api.get('/pipelines/failures')
       return data
     },
-    { enabled, retry: false, staleTime: 30_000, refetchInterval: 60_000 }
+    { enabled, retry: false, staleTime: 30_000, refetchInterval }
+  )
+}
+
+export function usePipelineFailure(issueNumber) {
+  return useQuery(
+    ['pipelines', 'failure', issueNumber],
+    async () => {
+      const { data } = await api.get(`/pipelines/failures/${issueNumber}`)
+      return data
+    },
+    {
+      enabled: Boolean(issueNumber),
+      retry: false,
+      staleTime: 20_000,
+    }
   )
 }
 
 export function useStagingHealth() {
+  const refetchInterval = useControlledRefetchInterval(null, 30_000, 30_000)
   return useQuery(
     ['pipelines', 'staging'],
     async () => {
       const { data } = await api.get('/pipelines/staging')
       return data
     },
-    { retry: 1, staleTime: 15_000, refetchInterval: 30_000 }
+    { retry: 1, staleTime: 15_000, refetchInterval }
   )
 }
 

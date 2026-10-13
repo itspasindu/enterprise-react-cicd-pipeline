@@ -2,9 +2,10 @@ import { NavLink, Outlet } from 'react-router-dom'
 import LiveStatusBar from './LiveStatusBar'
 import SetupBanner from './SetupBanner'
 import { getPipelineErrorMeta, usePipelineStatus } from '@hooks/usePipelines'
+import { PipelineRefreshProvider, usePipelineRefresh } from '@hooks/usePipelineRefresh'
 import { PIPELINE_NAV, TEST_IDS } from '../../config/app-contract'
 
-function PipelineLayout() {
+function PipelineLayoutInner() {
   const {
     data: status,
     error: statusError,
@@ -12,9 +13,12 @@ function PipelineLayout() {
     dataUpdatedAt,
     refetch,
   } = usePipelineStatus()
+  const { paused, interval, intervalOptions, togglePaused, setRefreshInterval } =
+    usePipelineRefresh()
   const statusSetupError = getPipelineErrorMeta(statusError)
   const needsSetup = status?.configured === false || statusSetupError?.type === 'setup'
   const apiDown = statusSetupError?.type === 'unavailable'
+  const github = status?.github
 
   return (
     <div className="space-y-6 animate-rise">
@@ -34,6 +38,13 @@ function PipelineLayout() {
         onRefresh={() => refetch()}
         owner={status?.owner}
         repo={status?.repo}
+        stagingUrl={status?.stagingUrl}
+        github={github}
+        paused={paused}
+        interval={interval}
+        intervalOptions={intervalOptions}
+        onTogglePause={togglePaused}
+        onIntervalChange={setRefreshInterval}
       />
 
       {apiDown ? (
@@ -78,6 +89,14 @@ function PipelineLayout() {
 
       <Outlet />
     </div>
+  )
+}
+
+function PipelineLayout() {
+  return (
+    <PipelineRefreshProvider>
+      <PipelineLayoutInner />
+    </PipelineRefreshProvider>
   )
 }
 

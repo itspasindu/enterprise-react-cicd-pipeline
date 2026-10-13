@@ -1,8 +1,10 @@
+import { Link } from 'react-router-dom'
 import { Helmet } from 'react-helmet-async'
 import SetupBanner from '@components/pipeline/SetupBanner'
+import FailureReport from '@components/pipeline/FailureReport'
 import LoadingSpinner from '@components/LoadingSpinner'
 import { getPipelineErrorMeta, usePipelineFailures, usePipelineStatus } from '@hooks/usePipelines'
-import { PAGE_TITLES, TEST_IDS } from '../../config/app-contract'
+import { PAGE_TITLES, TEST_IDS, pipelineFailurePath } from '../../config/app-contract'
 
 function timeAgo(iso) {
   if (!iso) return ''
@@ -48,30 +50,39 @@ function PipelineFailures() {
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">Open problems</h2>
                 <p className="text-sm text-slate-600">
-                  Issues created when a build or release needs attention.
+                  Full failure reports stay on this board — open a problem to read the details
+                  without leaving the dashboard.
                 </p>
               </div>
               <span className="text-sm font-semibold text-slate-500">{data.count} open</span>
             </div>
             {(data.failures || []).length ? (
-              <ul className="space-y-3">
+              <ul className="space-y-4">
                 {data.failures.map(issue => (
                   <li
                     key={issue.id}
-                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3"
                   >
-                    <a
-                      href={issue.htmlUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-semibold text-blue-700 hover:underline"
-                    >
-                      #{issue.number} {issue.title}
-                    </a>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Updated {timeAgo(issue.updatedAt)} · {issue.author || 'unknown'}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-1">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <Link
+                          to={pipelineFailurePath(issue.number)}
+                          className="font-semibold text-slate-900 hover:text-blue-700"
+                        >
+                          #{issue.number} {issue.title}
+                        </Link>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Updated {timeAgo(issue.updatedAt)} · {issue.author || 'unknown'}
+                        </p>
+                      </div>
+                      <Link
+                        to={pipelineFailurePath(issue.number)}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                      >
+                        Open report
+                      </Link>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
                       {(issue.labels || []).map(label => (
                         <span
                           key={label}
@@ -81,6 +92,16 @@ function PipelineFailures() {
                         </span>
                       ))}
                     </div>
+                    {issue.report?.hasStructuredReport ? (
+                      <details className="rounded-xl border border-slate-200 bg-white p-3">
+                        <summary className="cursor-pointer text-sm font-semibold text-slate-800">
+                          Preview report
+                        </summary>
+                        <div className="mt-3">
+                          <FailureReport report={issue.report} compact />
+                        </div>
+                      </details>
+                    ) : null}
                   </li>
                 ))}
               </ul>

@@ -22,7 +22,36 @@ describe('pipelines API', () => {
     expect(response.status).toBe(200)
     expect(response.body.configured).toBe(false)
     expect(response.body.live).toBe(false)
+    expect(response.body.github.reachable).toBe(false)
     expect(response.body.hint).toMatch(/GITHUB_TOKEN/)
+  })
+
+  it('includes GitHub egress health when configured', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn(async url => {
+      const href = String(url)
+      if (href.includes('/rate_limit')) {
+        return { ok: true, text: async () => JSON.stringify({ resources: {} }) }
+      }
+      return { ok: true, text: async () => '{}' }
+    })
+    try {
+      const app = createApp({
+        pool: { query: vi.fn() },
+        config: baseConfig({
+          githubToken: 'ghp_test',
+          githubOwner: 'acme',
+          githubRepo: 'platform',
+        }),
+      })
+      const response = await request(app).get('/api/pipelines/status')
+      expect(response.status).toBe(200)
+      expect(response.body.configured).toBe(true)
+      expect(response.body.github.reachable).toBe(true)
+      expect(response.body.stagingUrl).toBe('http://localhost:4173')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   it('returns 503 with setup hint when GitHub is not configured', async () => {
@@ -111,6 +140,9 @@ describe('pipelines API', () => {
       }
       if (href.includes('/issues')) {
         return { ok: true, text: async () => JSON.stringify([]) }
+      }
+      if (href.includes('/rate_limit') || href.includes('api.github.com/rate_limit')) {
+        return { ok: true, text: async () => JSON.stringify({ resources: {} }) }
       }
       // staging probes
       return { ok: true, status: 200, text: async () => '{}' }
@@ -204,6 +236,9 @@ describe('pipelines API', () => {
           status: 403,
           text: async () => JSON.stringify({ message: 'Resource not accessible by personal access token' }),
         }
+      }
+      if (href.includes('/rate_limit')) {
+        return { ok: true, text: async () => JSON.stringify({ resources: {} }) }
       }
       return { ok: true, status: 200, text: async () => '{}' }
     })

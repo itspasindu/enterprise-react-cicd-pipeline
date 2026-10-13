@@ -4,9 +4,17 @@ import StageBoard from '@components/pipeline/StageBoard'
 import PipelineFlow from '@components/pipeline/PipelineFlow'
 import RunSummaryCard from '@components/pipeline/RunSummaryCard'
 import StatusBadge from '@components/pipeline/StatusBadge'
+import ReleaseIdentityCard from '@components/pipeline/ReleaseIdentityCard'
+import DeployTimeline from '@components/pipeline/DeployTimeline'
 import LoadingSpinner from '@components/LoadingSpinner'
 import { getPipelineErrorMeta, usePipelineOverview, usePipelineStatus } from '@hooks/usePipelines'
-import { PAGE_TITLES, ROUTES, TEST_IDS, pipelineRunPath } from '../../config/app-contract'
+import {
+  PAGE_TITLES,
+  ROUTES,
+  TEST_IDS,
+  pipelineFailurePath,
+  pipelineRunPath,
+} from '../../config/app-contract'
 
 function PipelineOverview() {
   const statusQuery = usePipelineStatus()
@@ -56,6 +64,15 @@ function PipelineOverview() {
                 {dataUpdatedAt
                   ? ` · last checked ${new Date(dataUpdatedAt).toLocaleTimeString()}`
                   : ''}
+                {data.staging?.baseUrl ? (
+                  <>
+                    {' '}
+                    · probing{' '}
+                    <code className="rounded bg-slate-100 px-1 text-slate-700">
+                      {data.staging.baseUrl}
+                    </code>
+                  </>
+                ) : null}
               </span>
               <button
                 type="button"
@@ -107,8 +124,19 @@ function PipelineOverview() {
             </section>
 
             <section className="card">
+              <ReleaseIdentityCard release={data.release} />
+            </section>
+
+            <section className="card">
               <PipelineFlow stages={data.stages} title="Where things stand right now" />
             </section>
+
+            {(data.deployTimeline || []).length ? (
+              <section className="card">
+                <h2 className="mb-4 text-lg font-semibold text-slate-900">Deploy timeline</h2>
+                <DeployTimeline steps={data.deployTimeline} />
+              </section>
+            ) : null}
 
             <section className="grid gap-6 lg:grid-cols-2">
               <div className="card">
@@ -120,6 +148,36 @@ function PipelineOverview() {
                 <RunSummaryCard run={data.latestCd} />
               </div>
             </section>
+
+            {(data.recentFailures || []).length ? (
+              <section className="card">
+                <div className="mb-4 flex items-center justify-between gap-2">
+                  <h2 className="text-lg font-semibold text-slate-900">Open problems</h2>
+                  <Link
+                    to={ROUTES.pipelineFailures}
+                    className="text-sm font-semibold text-blue-700 hover:underline"
+                  >
+                    See all
+                  </Link>
+                </div>
+                <ul className="space-y-2">
+                  {data.recentFailures.map(issue => (
+                    <li
+                      key={issue.id}
+                      className="flex flex-wrap items-center justify-between gap-2"
+                    >
+                      <Link
+                        to={pipelineFailurePath(issue.number)}
+                        className="font-semibold text-blue-700 hover:underline"
+                      >
+                        #{issue.number} {issue.title}
+                      </Link>
+                      <span className="text-xs text-slate-500">{issue.author || 'unknown'}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
 
             <section className="card">
               <div className="mb-4 flex items-center justify-between gap-2">
@@ -158,6 +216,20 @@ function PipelineOverview() {
                             ? 'Release'
                             : 'Run'}{' '}
                         · {run.branch}
+                        {run.htmlUrl ? (
+                          <>
+                            {' '}
+                            ·{' '}
+                            <a
+                              href={run.htmlUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-semibold text-blue-700 hover:underline"
+                            >
+                              GitHub
+                            </a>
+                          </>
+                        ) : null}
                       </p>
                     </div>
                     <StatusBadge status={run.conclusion || run.status} />

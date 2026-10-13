@@ -16,6 +16,7 @@ const PipelineRuns = lazy(() => import('@pages/pipeline/PipelineRuns'))
 const PipelineRunDetail = lazy(() => import('@pages/pipeline/PipelineRunDetail'))
 const PipelineArtifacts = lazy(() => import('@pages/pipeline/PipelineArtifacts'))
 const PipelineFailures = lazy(() => import('@pages/pipeline/PipelineFailures'))
+const PipelineFailureDetail = lazy(() => import('@pages/pipeline/PipelineFailureDetail'))
 const PipelineStaging = lazy(() => import('@pages/pipeline/PipelineStaging'))
 
 function App() {
@@ -51,6 +52,7 @@ function App() {
                 <Route path="runs/:runId" element={<PipelineRunDetail />} />
                 <Route path="artifacts" element={<PipelineArtifacts />} />
                 <Route path="failures" element={<PipelineFailures />} />
+                <Route path="failures/:issueNumber" element={<PipelineFailureDetail />} />
                 <Route path="staging" element={<PipelineStaging />} />
               </Route>
               <Route path="*" element={<NotFound />} />
