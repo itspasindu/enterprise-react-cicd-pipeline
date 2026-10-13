@@ -4,6 +4,8 @@ import SetupBanner from '@components/pipeline/SetupBanner'
 import StageBoard from '@components/pipeline/StageBoard'
 import PipelineFlow from '@components/pipeline/PipelineFlow'
 import StatusBadge from '@components/pipeline/StatusBadge'
+import ReleaseIdentityCard from '@components/pipeline/ReleaseIdentityCard'
+import DeployTimeline from '@components/pipeline/DeployTimeline'
 import LoadingSpinner from '@components/LoadingSpinner'
 import { getPipelineErrorMeta, usePipelineRun } from '@hooks/usePipelines'
 import { PAGE_TITLES, ROUTES, TEST_IDS } from '../../config/app-contract'
@@ -64,6 +66,12 @@ function PipelineRunDetail() {
               </h2>
               <p className="text-sm text-slate-600">
                 Branch {data.branch} · started by {data.actor || 'unknown'}
+                {data.shortSha ? (
+                  <>
+                    {' '}
+                    · <span className="font-mono">{data.shortSha}</span>
+                  </>
+                ) : null}
               </p>
               {data.htmlUrl ? (
                 <a
@@ -72,14 +80,27 @@ function PipelineRunDetail() {
                   rel="noopener noreferrer"
                   className="inline-block text-sm font-semibold text-blue-700 hover:underline"
                 >
-                  Open on GitHub
+                  Open run on GitHub
                 </a>
               ) : null}
             </section>
 
+            {data.release ? (
+              <section className="card">
+                <ReleaseIdentityCard release={data.release} />
+              </section>
+            ) : null}
+
             <section className="card">
               <PipelineFlow stages={data.stages} title="Steps in this run" />
             </section>
+
+            {(data.deployTimeline || []).length ? (
+              <section className="card">
+                <h3 className="mb-4 text-lg font-semibold text-slate-900">Deploy timeline</h3>
+                <DeployTimeline steps={data.deployTimeline} />
+              </section>
+            ) : null}
 
             <section className="card">
               <h3 className="mb-4 text-lg font-semibold text-slate-900">Step details</h3>
@@ -94,7 +115,7 @@ function PipelineRunDetail() {
                     <th className="py-2 pr-4">Job</th>
                     <th className="py-2 pr-4">Step</th>
                     <th className="py-2 pr-4">Result</th>
-                    <th className="py-2">Link</th>
+                    <th className="py-2">Logs</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -113,7 +134,7 @@ function PipelineRunDetail() {
                             rel="noopener noreferrer"
                             className="font-semibold text-blue-700 hover:underline"
                           >
-                            View
+                            View logs
                           </a>
                         ) : (
                           '—'
@@ -141,16 +162,27 @@ function PipelineRunDetail() {
                           {artifact.expired ? ' · expired' : ''}
                         </p>
                       </div>
-                      {data.htmlUrl ? (
-                        <a
-                          href={data.htmlUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm font-semibold text-blue-700 hover:underline"
-                        >
-                          Open on GitHub
-                        </a>
-                      ) : null}
+                      <div className="flex flex-wrap gap-3">
+                        {artifact.githubUrl ? (
+                          <a
+                            href={artifact.githubUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm font-semibold text-blue-700 hover:underline"
+                          >
+                            Open on GitHub
+                          </a>
+                        ) : data.htmlUrl ? (
+                          <a
+                            href={data.htmlUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm font-semibold text-blue-700 hover:underline"
+                          >
+                            Open on GitHub
+                          </a>
+                        ) : null}
+                      </div>
                     </li>
                   ))}
                 </ul>

@@ -10,7 +10,7 @@ const FEATURES = [
     tone: 'from-emerald-500 to-teal-500',
   },
   {
-    title: 'Safety first',
+    title: 'Safety first before release',
     desc: 'Security scans look for known risks before a release can continue.',
     icon: '🛡',
     tone: 'from-blue-500 to-sky-500',

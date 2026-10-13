@@ -16,6 +16,7 @@ export const PAGE_TITLES = {
   pipelineRunDetail: `Run details | ${APP_NAME}`,
   pipelineArtifacts: `Reports | ${APP_NAME}`,
   pipelineFailures: `Problems | ${APP_NAME}`,
+  pipelineFailureDetail: `Problem report | ${APP_NAME}`,
   pipelineStaging: `Live website | ${APP_NAME}`,
   notFound: '404 | Page Not Found',
 }
@@ -29,6 +30,7 @@ export const ROUTES = {
   pipelineRunDetail: '/pipeline/runs/:runId',
   pipelineArtifacts: '/pipeline/artifacts',
   pipelineFailures: '/pipeline/failures',
+  pipelineFailureDetail: '/pipeline/failures/:issueNumber',
   pipelineStaging: '/pipeline/staging',
 }
 
@@ -59,6 +61,7 @@ export const TEST_IDS = {
   pipelineRunDetailPage: 'pipeline-run-detail-page',
   pipelineArtifactsPage: 'pipeline-artifacts-page',
   pipelineFailuresPage: 'pipeline-failures-page',
+  pipelineFailureDetailPage: 'pipeline-failure-detail-page',
   pipelineStagingPage: 'pipeline-staging-page',
   pipelineSetupBanner: 'pipeline-setup-banner',
   pipelineSubnav: 'pipeline-subnav',
@@ -89,4 +92,8 @@ export const NOT_FOUND_PATH = '/__e2e-not-found__'
 
 export function pipelineRunPath(runId) {
   return `/pipeline/runs/${runId}`
+}
+
+export function pipelineFailurePath(issueNumber) {
+  return `/pipeline/failures/${issueNumber}`
 }

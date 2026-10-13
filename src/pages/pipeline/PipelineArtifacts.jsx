@@ -83,12 +83,24 @@ function PipelineArtifacts() {
                         {artifact.expired ? ' · expired' : ''}
                       </p>
                     </div>
-                    <Link
-                      to={pipelineRunPath(artifact.runId)}
-                      className="text-sm font-semibold text-blue-700 hover:underline"
-                    >
-                      Related run
-                    </Link>
+                    <div className="flex flex-wrap gap-3">
+                      <Link
+                        to={pipelineRunPath(artifact.runId)}
+                        className="text-sm font-semibold text-blue-700 hover:underline"
+                      >
+                        Related run
+                      </Link>
+                      {artifact.githubUrl ? (
+                        <a
+                          href={artifact.githubUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm font-semibold text-blue-700 hover:underline"
+                        >
+                          GitHub
+                        </a>
+                      ) : null}
+                    </div>
                   </li>
                 ))}
               </ul>

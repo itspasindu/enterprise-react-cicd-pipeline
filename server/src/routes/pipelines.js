@@ -17,16 +17,31 @@ export function createPipelinesRouter({ config, pipelineService }) {
 
   router.use(limiter)
 
-  router.get('/status', (_request, response) => {
-    const configured = isGithubConfigured(config)
-    response.json({
-      configured,
-      owner: configured ? config.githubOwner : null,
-      repo: configured ? config.githubRepo : null,
-      stagingUrl: config.stagingUrl,
-      live: configured,
-      hint: configured ? null : SETUP_HINT,
-    })
+  router.get('/status', async (_request, response, next) => {
+    try {
+      const configured = isGithubConfigured(config)
+      let github = {
+        configured,
+        reachable: false,
+        latencyMs: null,
+        checkedAt: new Date().toISOString(),
+        error: configured ? null : 'GitHub is not configured',
+      }
+      if (configured) {
+        github = await pipelineService.getGithubHealth()
+      }
+      response.json({
+        configured,
+        owner: configured ? config.githubOwner : null,
+        repo: configured ? config.githubRepo : null,
+        stagingUrl: config.stagingUrl,
+        live: configured,
+        github,
+        hint: configured ? null : SETUP_HINT,
+      })
+    } catch (error) {
+      next(error)
+    }
   })
 
   function requireGithub(_request, response, next) {
@@ -52,10 +67,18 @@ export function createPipelinesRouter({ config, pipelineService }) {
       const workflow = request.query.workflow
       const page = Number(request.query.page) || 1
       const perPage = Math.min(Number(request.query.perPage) || 15, 50)
+      const branch = typeof request.query.branch === 'string' ? request.query.branch.trim() : ''
+      const actor = typeof request.query.actor === 'string' ? request.query.actor.trim() : ''
+      const status = typeof request.query.status === 'string' ? request.query.status.trim() : ''
+      const since = typeof request.query.since === 'string' ? request.query.since.trim() : ''
       const result = await pipelineService.listRuns({
         workflow: workflow === 'ci' ? 'ci.yml' : workflow === 'cd' ? 'cd.yml' : undefined,
         page,
         perPage,
+        branch: branch || undefined,
+        actor: actor || undefined,
+        status: status || undefined,
+        since: since || undefined,
       })
       if (workflow === 'ci' || workflow === 'cd') {
         result.runs = result.runs.filter(run => run.workflow === workflow)
@@ -87,6 +110,14 @@ export function createPipelinesRouter({ config, pipelineService }) {
       const page = Number(request.query.page) || 1
       const perPage = Math.min(Number(request.query.perPage) || 30, 50)
       response.json(await pipelineService.listFailures({ page, perPage }))
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.get('/failures/:issueNumber', requireGithub, async (request, response, next) => {
+    try {
+      response.json(await pipelineService.getFailureDetail(request.params.issueNumber))
     } catch (error) {
       next(error)
     }
