@@ -65,7 +65,7 @@ function App() {
               &copy; {new Date().getFullYear()} {APP_NAME}
             </p>
             <p className="text-center md:text-right">
-              Built to make Pipeline delivery status easy to understand.
+              Built to make CI/CD Pipeline delivery status easy to understand.
             </p>
           </div>
         </footer>
