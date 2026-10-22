@@ -63,7 +63,7 @@ function Home() {
             aria-hidden
           />
           <p className="relative text-sm font-bold uppercase tracking-[0.14em] text-blue-700 mb-4">
-            Simple delivery dashboard
+            CI/CD delivery dashboard
           </p>
           <h1 className="relative text-4xl md:text-6xl font-extrabold mb-5 text-slate-900 tracking-tight leading-[1.08]">
             Is the release <span className="text-gradient">healthy?</span>
