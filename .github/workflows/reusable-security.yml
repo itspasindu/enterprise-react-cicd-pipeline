@@ -72,11 +72,14 @@ jobs:
       - name: Trivy repository scan
         run: |
           set -euo pipefail
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.58.1/contrib/install.sh \
-            | sh -s -- -b "$HOME/.local/bin" v0.58.1
+          version=0.76.1
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${version}/trivy_${version}_Linux-64bit.tar.gz"
+          tar -xzf /tmp/trivy.tar.gz -C "$HOME/.local/bin" trivy
           "$HOME/.local/bin/trivy" fs --format sarif --output trivy-results.sarif --severity CRITICAL,HIGH .
       - uses: github/codeql-action/upload-sarif@1b549b9259bda1cb5ddde3b41741a82a2d15a841 # v3.28.13
-        if: always()
+        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: trivy-results.sarif
           category: trivy-filesystem
