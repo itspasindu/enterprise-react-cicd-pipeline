@@ -55,6 +55,20 @@ describe('API', () => {
     ])
   })
 
+  it('does not force HTTPS upgrades on the web response', async () => {
+    const webRoot = mkdtempSync(path.join(tmpdir(), 'platform-web-'))
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    writeFileSync(path.join(webRoot, 'index.html'), '<!doctype html><title>app</title>')
+    const withWeb = createApp({
+      pool: { query: vi.fn().mockResolvedValue({ rows: [] }) },
+      config: { stagingUrl: 'http://localhost:4173', webRoot },
+    })
+    const response = await request(withWeb).get('/')
+    expect(response.status).toBe(200)
+    expect(response.headers['content-security-policy'] || '').not.toMatch(/upgrade-insecure-requests/i)
+    expect(response.headers['cross-origin-opener-policy']).toBeUndefined()
+  })
+
   it('serves the web build and falls back to index.html', async () => {
     const webRoot = mkdtempSync(path.join(tmpdir(), 'platform-web-'))
     // eslint-disable-next-line security/detect-non-literal-fs-filename

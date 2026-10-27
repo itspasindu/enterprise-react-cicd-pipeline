@@ -23,6 +23,7 @@ export function createApp({ pool, config = {} }) {
   app.use(
     helmet({
       contentSecurityPolicy: {
+        useDefaults: false,
         directives: {
           defaultSrc: ["'self'"],
           scriptSrc: ["'self'", "'unsafe-inline'"],
@@ -32,6 +33,10 @@ export function createApp({ pool, config = {} }) {
           connectSrc: ["'self'", 'https:'],
         },
       },
+      crossOriginEmbedderPolicy: false,
+      crossOriginOpenerPolicy: false,
+      crossOriginResourcePolicy: false,
+      originAgentCluster: false,
       frameguard: { action: 'deny' },
       referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
     })
