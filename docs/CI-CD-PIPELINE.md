@@ -1,39 +1,35 @@
-# Full-Stack CI/CD Pipeline
+# CI/CD Pipeline
+
+Operational handover: [HANDOVER.md](HANDOVER.md), [SECRETS.md](SECRETS.md), [RUNBOOK.md](RUNBOOK.md), [RELEASE.md](RELEASE.md). Setup steps are in [SETUP-GUIDE.md](SETUP-GUIDE.md).
 
 ## Workflow map
 
-```text
-Pull request / main push
-        │
-        ▼
-      ci.yml
-        ├── reusable-test.yml
-        │     ├── web lint, typecheck, unit coverage
-        │     ├── API lint, unit, PostgreSQL integration
-        │     ├── build web dist once
-        │     └── Compose + five-browser Playwright
-        ├── reusable-security.yml
-        │     ├── web + API npm audit
-        │     ├── TruffleHog
-        │     ├── CodeQL
-        │     └── Trivy filesystem scan
-        └── reusable-docker.yml (main/manual)
-              ├── web + API images
-              ├── CalVer tags + immutable digests
-              ├── Buildx caches
-              ├── SBOM + provenance
-              ├── blocking image scans
-              └── release-bundle artifact
-
-Successful main CI
-        │
-        ▼
-      cd.yml
-        ├── reusable-deploy.yml
-        └── reusable-rollback.yml (deploy failure)
+```mermaid
+flowchart TD
+  pr["Pull request to main"] --> ci["ci.yml"]
+  push["Push to main"] --> ci
+  manualCi["Manual CI"] --> ci
+  ci --> test["Test Full Stack"]
+  ci --> security["Security Full Stack"]
+  test --> passed{"Tests and security passed?"}
+  security --> passed
+  passed -->|No| ciIssue["ci-failure issue"]
+  passed -->|Yes| publish{"Push to main or manual CI?"}
+  publish -->|Pull request| checks["Checks only"]
+  publish -->|Yes| release["Package Release"]
+  release -->|Failure| ciIssue
+  release -->|Success on main| cd["cd.yml"]
+  hand["Manual CD with a CI run ID"] --> cd
+  cd --> deploy["Deploy Staging"]
+  deploy -->|Smoke checks pass| live["Staging serving the new directory"]
+  deploy -->|Failure| rollback["Point current at the previous directory"]
+  rollback --> keep["Database data and migrations stay"]
+  rollback --> cdIssue["Deploy failure issue"]
 ```
 
 GitHub reusable workflows must be placed directly in `.github/workflows`; nested `workflows/reusable/` files are not supported.
+
+Package Release waits until both Test Full Stack and Security Full Stack succeed. A pull request stops after those checks. A successful CI run on `main` starts CD. CD can also be started by hand with the run ID of a successful CI run that uploaded `release-bundle`.
 
 ## CI orchestration
 
@@ -49,48 +45,59 @@ Concurrency cancels stale CI runs for the same ref. Staging CD is serialized and
 
 ### Tests
 
+```mermaid
+flowchart LR
+  web["Web quality and unit tests"] --> build["One web build"]
+  api["API unit tests and database integration"] --> build
+  build --> e2e["Browser end-to-end tests"]
+```
+
+Security runs beside the tests, not after them:
+
+```mermaid
+flowchart LR
+  security["Security Full Stack"] --> deps["Dependency and secret scans"]
+  security --> code["CodeQL and filesystem scan"]
+```
+
 [`reusable-test.yml`](../.github/workflows/reusable-test.yml) runs:
 
-1. React ESLint, Prettier, TypeScript, Vitest coverage.
-2. API ESLint and Vitest unit tests.
-3. PostgreSQL 17 service, migrations, and API integration tests.
-4. One Vite production build uploaded as `web-dist`.
-5. Full Compose stack and Playwright on Chromium, Firefox, WebKit, Mobile Chrome, and Mobile Safari.
+1. Web lint, format check, type check, and unit-test coverage.
+2. API lint and unit tests.
+3. Database service, forward-only migrations, and API integration tests.
+4. One production web build, uploaded as `web-dist`.
+5. Full host stack and browser end-to-end tests on Chromium, Firefox, WebKit, Mobile Chrome, and Mobile Safari. The API serves the web build on port 4173. PostgreSQL is installed on the runner for that job.
 
-The frontend and Playwright share `src/config/app-contract.js`. UI copy can change without rewriting E2E assertions.
+End-to-end checks share `src/config/app-contract.js` with the web service. Page copy can change without rewriting those assertions.
 
 ### Security
 
 [`reusable-security.yml`](../.github/workflows/reusable-security.yml) audits both lockfiles and runs verified-secret scanning, CodeQL, and Trivy. Actions are pinned to commit SHAs and permissions are least-privilege.
 
-## Container release
+## Release archive
 
-[`reusable-docker.yml`](../.github/workflows/reusable-docker.yml) consumes the exact `web-dist` artifact and creates:
-
-```text
-ghcr.io/<owner>/platform-web:YYYY.MM.N
-ghcr.io/<owner>/platform-api:YYYY.MM.N
+```mermaid
+flowchart LR
+  dist["web-dist"] --> pack["Pack web files and API"]
+  pack --> sums["checksums.txt"]
+  sums --> bundle["release-bundle"]
 ```
 
-Both also receive `:staging` and `:sha-<short>`. The release metadata stores two immutable identities per image:
+[`reusable-release.yml`](../.github/workflows/reusable-release.yml) consumes the exact `web-dist` artifact and packs a directory named `YYYY.MM.N-<full-sha>`. The version is the next `YYYY.MM.N` for the current UTC month, counted from release artifacts already stored for that month. `release.json` records the version, full commit SHA, and `runtime: host-node`.
 
-```text
-reference (GHCR manifest): ghcr.io/<owner>/platform-web@sha256:<manifest-digest>
-imageId   (config digest): sha256:<image-config-id>
-```
-
-Each image is built once (`load: true`), scanned with Trivy on that local tag, then pushed with `docker push` (no second build). Scoped Buildx caches, CycloneDX SBOMs, and provenance attestations apply to the same pushed digest. Releases with fixed HIGH/CRITICAL image vulnerabilities are blocked before push.
+The API dependencies are installed on the runner with `npm ci --omit=dev`, so the server does not need to download packages during deploy.
 
 ### Release bundle
 
 The `release-bundle` artifact contains:
 
-- `release.json` — immutable manifest (full commit SHA, GHCR `@sha256` references, local `imageId` values, CalVer tags, workflow run id)
-- `checksums.txt` — integrity verification for all bundled files
-- `compose.yml` — release-pinned Compose (no `build:` keys; web/api `image:` lines are `${WEB_IMAGE}` / `${API_IMAGE}` placeholders)
-- `deploy-stack.sh`, `rollback-stack.sh`, `health-check.sh`, `transfer-release-images.sh`, `lib/image-archive.sh`, `lib/validate-image-ref.sh`
-- web and API CycloneDX SBOMs
-- `release-metadata.json` — legacy alias with the same digest references and image Ids
+- `release.json` — version, full commit SHA, workflow run id, repository
+- `release-metadata.json` — the same document
+- `checksums.txt` — `sha256sum` of every file in the archive
+- `web/` — the built web files
+- `api/` — the API, its migrations, and production dependencies
+- `deploy-release.sh`, `rollback-release.sh`, `health-check.sh`, `lib/host-process.sh`
+- CycloneDX SBOMs for the web and API lockfiles
 
 A second artifact is also uploaded as `release-<CalVer>-<full-sha>` (immutable name; not `latest`).
 
@@ -98,34 +105,40 @@ A second artifact is also uploaded as `release-<CalVer>-<full-sha>` (immutable n
 
 [`cd.yml`](../.github/workflows/cd.yml) is triggered by a successful `CI` workflow on `main`, or manually with a successful CI run ID.
 
+```mermaid
+flowchart TD
+  bundle["release-bundle"] --> checksum["Verify checksums"]
+  checksum --> copy["Copy the directory over SSH"]
+  copy --> link["Point current at that directory"]
+  link --> migrate["Apply forward-only migrations"]
+  migrate --> restart["Restart Node.js"]
+  restart --> smoke["Smoke checks"]
+  smoke -->|Pass| ready["Staging ready"]
+  smoke -->|Fail| back["Point current at the previous directory"]
+  back --> unchanged["Database data and applied migrations stay"]
+```
+
 Deployment steps:
 
 1. Download the CI `release-bundle`.
 2. Enter the `staging` GitHub Environment.
 3. Optionally connect the runner with Tailscale.
 4. Verify the pinned SSH host key.
-5. Verify `checksums.txt`, read `release.json`, and pull both immutable GHCR digests on the runner (assert pulled config Ids match `images.*.imageId`).
-6. Transfer images by digest reference: `docker save` on the runner, `docker load` on the VM, then verify the loaded config Id matches `imageId` (RepoDigests are not reliable after offline load).
-7. Copy the release bundle to the deploy root (`/opt/platform` when writable).
-8. Start PostgreSQL and wait for health.
-9. Apply forward-only migrations.
-10. Roll out API and web with `WEB_IMAGE`/`API_IMAGE` set to the portable `imageId` values and wait for Compose health.
-11. Smoke-test `/`, `/about`, `/contact`, `/api/health`, `/api/ready`, and pipeline endpoints.
+5. Verify `checksums.txt` and `release.json`.
+6. Copy the archive to `/opt/platform/releases/<version>-<sha>/` when that directory is writable.
+7. Record the previous `current` target in `previous-release.json`.
+8. Point `/opt/platform/current` at the new directory.
+9. Apply forward-only migrations with the Node.js already on the host.
+10. Restart the API. It listens on port 4173 and serves both the web files and `/api`.
+11. Smoke-test `/`, `/about`, `/contact`, `/api/health`, and `/api/ready`.
 
-CD does not check out the application repository or overlay deployment files from the current branch.
+CD does not check out the application repository. PostgreSQL is already running on the host. Rollback does not restart or restore it.
 
-The VM does not need outbound access to GHCR.
+### What stays on the host
 
-### Runtime hardening
-
-- non-root web and API containers
-- read-only filesystems and tmpfs
-- all Linux capabilities dropped
-- `no-new-privileges`
-- CPU and memory limits
-- PostgreSQL only on an internal Docker network
-- API attached to an `egress` network so it can call the GitHub API for the live pipeline monitor
-- only web port `4173` exposed
+- Node.js, used only to run the release under `current`
+- PostgreSQL on `127.0.0.1`, with its existing data directory
+- port 4173, owned by that Node.js process
 
 ## Database migration and rollback policy
 
@@ -136,16 +149,16 @@ Migrations are transaction-wrapped, recorded in `schema_migrations`, and forward
 3. backfill
 4. remove old structures in a later release
 
-Rollback restores prior web and API image Ids from `/opt/platform/previous-release.json` (falling back to `previous.env`). Legacy mutable tags in older `previous.env` files are skipped with a warning rather than failing the CD recovery path. PostgreSQL data and applied migrations are preserved to prevent destructive automated rollback.
+Rollback points `/opt/platform/current` at the directory recorded in `previous-release.json` and restarts Node.js. Database data and applied migrations are preserved.
 
 ## Failure issues and wiki
 
-CI and CD call `scripts/create-failure-ticket.sh`. Full-stack issue stages include:
+CI and CD call `scripts/create-failure-ticket.sh`. Issue stages include:
 
 - Full-Stack Tests
 - Security Analysis
 - Web & API Container Release
-- Compose Deployment
+- Host Deployment
 
 Issues include direct run links, stage labels, reproduction guidance, and deduplication. The existing `Developer Fix Choice` workflow remains available for approved lint/format fixes or manual remediation.
 
@@ -155,10 +168,10 @@ Issues include direct run links, stage labels, reproduction guidance, and dedupl
 
 | Artifact | Producer | Purpose |
 | --- | --- | --- |
-| `web-dist` | tests | exact frontend build |
-| `web-coverage` | tests | React coverage |
+| `web-dist` | tests | exact web build consumed by the image release |
+| `web-coverage` | tests | web unit-test coverage |
 | `playwright-report` | tests | traces/screenshots/report |
-| `release-bundle` | Docker release | metadata, Compose, SBOMs, scripts |
+| `release-bundle` | release archive | web files, API, checksums, deploy scripts |
 | `cd-release` | CD prepare | deployment copy of release bundle |
 
 ## Required permissions and secrets
@@ -180,15 +193,12 @@ Issues include direct run links, stage labels, reproduction guidance, and dedupl
 
 ```bash
 # Status
-cd /opt/platform
-docker compose --env-file current.env -f compose.yml ps
+curl -f http://127.0.0.1:4173/api/ready
+readlink -f /opt/platform/current
 
 # Logs
-docker compose --env-file current.env -f compose.yml logs --tail=200 web api postgres
+tail -n 200 /opt/platform/api.log
 
-# Health
-curl -f http://127.0.0.1:4173/api/ready
-
-# Manual application rollback
-DEPLOY_ROOT=/opt/platform /opt/platform/rollback-stack.sh
+# Manual rollback
+DEPLOY_ROOT=/opt/platform /opt/platform/rollback-release.sh
 ```

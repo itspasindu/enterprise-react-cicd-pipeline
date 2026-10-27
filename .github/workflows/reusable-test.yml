@@ -31,22 +31,8 @@ jobs:
   api:
     name: API Unit and PostgreSQL Integration Tests
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_DB: platform_test
-          POSTGRES_USER: platform
-          POSTGRES_PASSWORD: test-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U platform -d platform_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
-      DATABASE_URL: postgres://platform:test-password@localhost:5432/platform_test
+      DATABASE_URL: postgres://platform:test-password@127.0.0.1:5432/platform_test
       NODE_ENV: test
     defaults:
       run:
@@ -59,6 +45,9 @@ jobs:
           cache: npm
           cache-dependency-path: server/package-lock.json
       - run: npm ci --prefer-offline --no-audit
+      - name: Install PostgreSQL
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci-install-postgres.sh platform_test platform test-password
       - name: Lint API
         run: npm run lint
       - name: Apply migrations
@@ -107,16 +96,43 @@ jobs:
           name: web-dist
           path: dist/
       - run: npx playwright install --with-deps
-      - name: Start full stack
-        run: docker compose -f compose.yml up -d --build --wait
-      - name: Run cross-browser E2E
-        run: npm run test:e2e
-      - name: Compose diagnostics
+      - name: Install PostgreSQL
+        run: bash scripts/ci-install-postgres.sh platform platform test-password
+      - name: Start API and run cross-browser E2E
+        env:
+          DATABASE_URL: postgres://platform:test-password@127.0.0.1:5432/platform
+          PORT: 4173
+          WEB_ROOT: ${{ github.workspace }}/dist
+          NODE_ENV: test
+        run: |
+          set -euo pipefail
+          npm ci --prefix server --omit=dev
+          npm run migrate --prefix server
+          npm start --prefix server > /tmp/platform-api.log 2>&1 &
+          echo $! > /tmp/platform-api.pid
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4173/api/ready >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != 1 ]; then
+            echo "API failed to become ready" >&2
+            cat /tmp/platform-api.log >&2 || true
+            exit 1
+          fi
+          npm run test:e2e
+      - name: API diagnostics
         if: failure()
-        run: docker compose -f compose.yml ps && docker compose -f compose.yml logs --no-color
-      - name: Stop full stack
+        run: cat /tmp/platform-api.log || true
+      - name: Stop API
         if: always()
-        run: docker compose -f compose.yml down -v
+        run: |
+          if [ -f /tmp/platform-api.pid ]; then
+            kill "$(cat /tmp/platform-api.pid)" || true
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

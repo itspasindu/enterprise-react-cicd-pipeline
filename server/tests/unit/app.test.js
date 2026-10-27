@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 import { createApp } from '../../src/app.js'
@@ -50,5 +53,28 @@ describe('API', () => {
       'test@example.com',
       'Hello from test',
     ])
+  })
+
+  it('serves the web build and falls back to index.html', async () => {
+    const webRoot = mkdtempSync(path.join(tmpdir(), 'platform-web-'))
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    writeFileSync(path.join(webRoot, 'index.html'), '<!doctype html><title>app</title>')
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    writeFileSync(path.join(webRoot, 'app.js'), 'console.log(1)')
+    const { app } = appWith()
+    const withWeb = createApp({
+      pool: { query: vi.fn().mockResolvedValue({ rows: [] }) },
+      config: { stagingUrl: 'http://localhost:4173', webRoot },
+    })
+    expect(app).toBeDefined()
+    const page = await request(withWeb).get('/about')
+    expect(page.status).toBe(200)
+    expect(page.text).toContain('<title>app</title>')
+    const asset = await request(withWeb).get('/app.js')
+    expect(asset.status).toBe(200)
+    expect(asset.text).toContain('console.log(1)')
+    const missingApi = await request(withWeb).get('/api/missing')
+    expect(missingApi.status).toBe(404)
+    expect(missingApi.body.error).toBe('Not found')
   })
 })

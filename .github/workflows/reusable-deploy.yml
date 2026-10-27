@@ -30,45 +30,25 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     permissions:
-      packages: read # docker login + pull immutable digests from GHCR
+      contents: read
     env:
       TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
     steps:
-      # No repository checkout: deployment scripts come from the CI release bundle only.
       - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: ${{ inputs.artifact-name }}
           path: release/
-      - name: Verify immutable release bundle
+      - name: Verify release archive
         run: |
           set -euo pipefail
           test -f release/release.json
           test -f release/checksums.txt
-          test -f release/compose.yml
-          test -f release/deploy-stack.sh
-          test -f release/rollback-stack.sh
-          test -f release/transfer-release-images.sh
+          test -f release/web/index.html
+          test -f release/api/package.json
+          test -x release/deploy-release.sh || chmod +x release/deploy-release.sh release/rollback-release.sh release/lib/host-process.sh
           (cd release && sha256sum -c checksums.txt)
-          chmod +x release/deploy-stack.sh release/rollback-stack.sh release/health-check.sh release/transfer-release-images.sh
-          # shellcheck source=lib/validate-image-ref.sh
-          source release/lib/validate-image-ref.sh
-          WEB_REF="$(jq -er '.images.web.reference' release/release.json)"
-          API_REF="$(jq -er '.images.api.reference' release/release.json)"
-          WEB_ID="$(jq -er '.images.web.imageId' release/release.json)"
-          API_ID="$(jq -er '.images.api.imageId' release/release.json)"
-          validate_image_reference "$WEB_REF"
-          validate_image_reference "$API_REF"
-          validate_image_id "$WEB_ID"
-          validate_image_id "$API_ID"
-          validate_release_compose_placeholders release/compose.yml
-          chmod a-w release/release.json release/checksums.txt release/compose.yml \
-            release/deploy-stack.sh release/rollback-stack.sh release/health-check.sh \
-            release/transfer-release-images.sh release/lib/image-archive.sh \
-            release/lib/validate-image-ref.sh release/lib/compose-egress.sh 2>/dev/null || true
+          test "$(jq -r .runtime release/release.json)" = "host-node"
           echo "Release $(jq -r .version release/release.json) commit=$(jq -r .commit release/release.json)"
-          echo "Deploy digests web=${WEB_REF} api=${API_REF}"
-          echo "Runtime Ids web=${WEB_ID} api=${API_ID}"
-          test -f release/lib/compose-egress.sh
       - name: Require pipeline monitor token
         env:
           PIPELINE_GITHUB_TOKEN: ${{ secrets.PIPELINE_GITHUB_TOKEN }}
@@ -92,40 +72,6 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$KNOWN_HOSTS" | sed 's/\r$//' > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
-      - name: Pull immutable release digests
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # shellcheck source=lib/validate-image-ref.sh
-          source release/lib/validate-image-ref.sh
-          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          WEB_REF="$(jq -er '.images.web.reference' release/release.json)"
-          API_REF="$(jq -er '.images.api.reference' release/release.json)"
-          WEB_ID="$(jq -er '.images.web.imageId' release/release.json)"
-          API_ID="$(jq -er '.images.api.imageId' release/release.json)"
-          VERSION="$(jq -er '.version' release/release.json)"
-          validate_image_reference "$WEB_REF"
-          validate_image_reference "$API_REF"
-          validate_image_id "$WEB_ID"
-          validate_image_id "$API_ID"
-          echo "Pulling ${WEB_REF}"
-          docker pull "$WEB_REF"
-          echo "Pulling ${API_REF}"
-          docker pull "$API_REF"
-          PULLED_WEB_ID="$(docker image inspect --format='{{.Id}}' "$WEB_REF")"
-          PULLED_API_ID="$(docker image inspect --format='{{.Id}}' "$API_REF")"
-          if [ "$PULLED_WEB_ID" != "$WEB_ID" ] || [ "$PULLED_API_ID" != "$API_ID" ]; then
-            echo "Pulled image Ids do not match release.json imageId" >&2
-            echo "  web got=${PULLED_WEB_ID} want=${WEB_ID}" >&2
-            echo "  api got=${PULLED_API_ID} want=${API_ID}" >&2
-            exit 1
-          fi
-          {
-            echo "WEB_IMAGE=${WEB_REF}"
-            echo "API_IMAGE=${API_REF}"
-            echo "VERSION=${VERSION}"
-          } >> "$GITHUB_ENV"
       - name: Resolve staging deploy root
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -150,51 +96,14 @@ jobs:
             echo "::notice::/opt/platform is not writable for ${USER}; deploying to ${DEPLOY_ROOT}. For the preferred path, run on the VM: sudo mkdir -p /opt/platform && sudo chown -R ${USER}:${USER} /opt/platform"
           fi
           echo "DEPLOY_ROOT=${DEPLOY_ROOT}" >> "$GITHUB_ENV"
-      - name: Ensure staging Docker Compose v2
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ secrets.STAGING_USER }}
-          COMPOSE_VERSION: v2.32.4
-        run: |
-          set -euo pipefail
-          SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
-          ssh $SSH_OPTS "${USER}@${HOST}" 'bash -s' <<'EOF'
-          set -euo pipefail
-          command -v docker >/dev/null || { echo "Docker is required on staging"; exit 1; }
-          command -v jq >/dev/null || { echo "jq is required on staging (sudo apt-get install -y jq)"; exit 1; }
-          docker info >/dev/null
-          EOF
-
-          if ssh $SSH_OPTS "${USER}@${HOST}" 'docker compose version >/dev/null 2>&1'; then
-            ssh $SSH_OPTS "${USER}@${HOST}" 'docker compose version'
-            exit 0
-          fi
-
-          echo "Compose v2 missing on staging; bootstrapping via runner download + SCP (VM needs no outbound DNS)."
-          REMOTE_UNAME="$(ssh $SSH_OPTS "${USER}@${HOST}" 'uname -m')"
-          case "$REMOTE_UNAME" in
-            x86_64) ARCH=x86_64 ;;
-            aarch64|arm64) ARCH=aarch64 ;;
-            armv7l) ARCH=armv7 ;;
-            *) echo "Unsupported staging arch: $REMOTE_UNAME"; exit 1 ;;
-          esac
-
-          curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${ARCH}" \
-            -o /tmp/docker-compose
-          chmod +x /tmp/docker-compose
-          ssh $SSH_OPTS "${USER}@${HOST}" 'mkdir -p "$HOME/.docker/cli-plugins"'
-          scp $SSH_OPTS /tmp/docker-compose "${USER}@${HOST}:.docker/cli-plugins/docker-compose"
-          ssh $SSH_OPTS "${USER}@${HOST}" 'chmod +x "$HOME/.docker/cli-plugins/docker-compose" && docker compose version'
-      - name: Transfer bundle and images
+      - name: Require Node.js and jq on staging
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
         run: |
-          set -euo pipefail
-          export RELEASE_DIR=release
-          chmod +x release/transfer-release-images.sh
-          bash release/transfer-release-images.sh
-      - name: Deploy Compose stack
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "${USER}@${HOST}" 'command -v node >/dev/null && command -v jq >/dev/null && command -v curl >/dev/null && node -v'
+      - name: Install release and restart API
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
@@ -203,27 +112,24 @@ jobs:
           GITHUB_OWNER: ${{ github.repository_owner }}
           GITHUB_REPO: ${{ github.event.repository.name }}
         run: |
+          set -euo pipefail
+          SSH_OPTS="-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          tar -C release -czf /tmp/platform-release.tgz .
+          scp $SSH_OPTS /tmp/platform-release.tgz "${USER}@${HOST}:/tmp/platform-release.tgz"
           PASSWORD_B64="$(printf '%s' "$POSTGRES_PASSWORD" | base64 -w 0)"
           TOKEN_B64="$(printf '%s' "$PIPELINE_GITHUB_TOKEN" | base64 -w 0)"
-          # Resolve on the runner — staging VM DNS inside containers often fails (EAI_AGAIN).
-          GITHUB_API_IP="$(getent ahostsv4 api.github.com | awk '{print $1; exit}')"
-          if [[ ! "$GITHUB_API_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Runner could not resolve api.github.com to IPv4"
-            exit 1
-          fi
-          echo "api.github.com -> ${GITHUB_API_IP} (for staging Compose extra_hosts)"
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            "${USER}@${HOST}" "DEPLOY_ROOT=${DEPLOY_ROOT} POSTGRES_PASSWORD_B64=${PASSWORD_B64} GITHUB_TOKEN_B64=${TOKEN_B64} GITHUB_OWNER=${GITHUB_OWNER} GITHUB_REPO=${GITHUB_REPO} GITHUB_API_IP=${GITHUB_API_IP} bash -s" <<'EOF'
+          ssh $SSH_OPTS "${USER}@${HOST}" \
+            "DEPLOY_ROOT=${DEPLOY_ROOT} POSTGRES_PASSWORD_B64=${PASSWORD_B64} GITHUB_TOKEN_B64=${TOKEN_B64} GITHUB_OWNER=${GITHUB_OWNER} GITHUB_REPO=${GITHUB_REPO} bash -s" <<'EOF'
           set -euo pipefail
-          command -v jq >/dev/null || { echo "jq is required on staging"; exit 1; }
           export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
           export GITHUB_TOKEN="$(printf '%s' "$GITHUB_TOKEN_B64" | base64 -d)"
-          export GITHUB_API_IP
-          echo "Deploy release=$(jq -er '.version' "$DEPLOY_ROOT/release.json") commit=$(jq -er '.commit' "$DEPLOY_ROOT/release.json")"
-          echo "Deploy digests web=$(jq -er '.images.web.reference' "$DEPLOY_ROOT/release.json")"
-          echo "GitHub API IP for extra_hosts=${GITHUB_API_IP}"
-          chmod +x "$DEPLOY_ROOT/deploy-stack.sh" "$DEPLOY_ROOT/rollback-stack.sh" "$DEPLOY_ROOT/health-check.sh"
-          "$DEPLOY_ROOT/deploy-stack.sh"
+          rm -rf /tmp/platform-incoming
+          mkdir -p /tmp/platform-incoming
+          tar -C /tmp/platform-incoming -xzf /tmp/platform-release.tgz
+          chmod +x /tmp/platform-incoming/deploy-release.sh /tmp/platform-incoming/rollback-release.sh /tmp/platform-incoming/lib/host-process.sh
+          echo "Deploy release=$(jq -er '.version' /tmp/platform-incoming/release.json) commit=$(jq -er '.commit' /tmp/platform-incoming/release.json)"
+          RELEASE_DIR=/tmp/platform-incoming /tmp/platform-incoming/deploy-release.sh
+          rm -rf /tmp/platform-incoming /tmp/platform-release.tgz
           EOF
       - name: External smoke tests
         env:
@@ -248,9 +154,8 @@ jobs:
             head -c 2000 "$OVERVIEW_BODY" || true
             echo
             echo "Common causes:"
-            echo "  - API container DNS/egress cannot resolve api.github.com (EAI_AGAIN)"
+            echo "  - the host cannot reach api.github.com"
             echo "  - PIPELINE_GITHUB_TOKEN missing actions:read (and ideally issues:read)"
-            echo "  - Host outbound HTTPS blocked"
             exit 1
           fi
           echo "/api/pipelines/overview: OK"
