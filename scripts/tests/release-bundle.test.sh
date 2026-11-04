@@ -39,6 +39,7 @@ node -e '
 test -f "${WORK}/release/web/index.html"
 test -f "${WORK}/release/api/src/index.js"
 test ! -d "${WORK}/release/api/tests"
+grep -q -- '--package-lock-only' "${ROOT}/scripts/create-release-bundle.sh"
 test -x "${WORK}/release/deploy-release.sh"
 test -f "${WORK}/release/lib/host-process.sh"
 

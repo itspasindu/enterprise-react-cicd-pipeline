@@ -38,9 +38,11 @@ tar -C "${ROOT}/server" \
 
 if [ "${SKIP_NPM_CI:-}" != "1" ]; then
   npm ci --prefix "${OUT}/api" --omit=dev
-  npm sbom --prefix "${OUT}/api" --omit=dev --sbom-format cyclonedx > "${OUT}/api.cdx.json"
+  # Production installs omit devDependencies. npm sbom then exits ESBOMPROBLEMS
+  # unless the inventory is read from the lockfile.
+  npm sbom --prefix "${OUT}/api" --omit=dev --package-lock-only --sbom-format cyclonedx > "${OUT}/api.cdx.json"
   if [ -f "${ROOT}/package-lock.json" ]; then
-    npm sbom --prefix "${ROOT}" --omit=dev --sbom-format cyclonedx > "${OUT}/web.cdx.json"
+    npm sbom --prefix "${ROOT}" --omit=dev --package-lock-only --sbom-format cyclonedx > "${OUT}/web.cdx.json"
   fi
 fi
 
