@@ -8,10 +8,11 @@ import {
 import { mapIssueComment, parseFailureReport } from './failure-report.js'
 
 const DEPLOY_TIMELINE_STEPS = [
-  { key: 'verify', label: 'Verify bundle', match: /verify.*bundle|immutable release/i },
+  { key: 'verify', label: 'Verify bundle', match: /verify.*bundle|immutable release|verify release/i },
   { key: 'pull', label: 'Pull digests', match: /pull.*digest|immutable release digest/i },
   { key: 'transfer', label: 'Transfer images', match: /transfer/i },
   { key: 'rollout', label: 'Compose rollout', match: /deploy compose|compose stack/i },
+  { key: 'install', label: 'Install release', match: /^install release/i },
   { key: 'smoke', label: 'External smoke', match: /smoke|external smoke/i },
 ]
 
@@ -22,18 +23,18 @@ export const STAGE_DEFINITIONS = [
   { key: 'security-scan', name: 'Security Analysis', jobNames: ['Security Full Stack'] },
   {
     key: 'container-release',
-    name: 'Web & API Container Release',
+    name: 'Release Archive',
     jobNames: ['Package Release'],
   },
   {
     key: 'compose-deploy',
-    name: 'Compose Deployment',
+    name: 'Host Deployment',
     jobNames: ['Deploy Staging', 'Deploy Full Stack to Staging', 'Prepare Release'],
   },
   {
     key: 'rollback',
     name: 'Staging Rollback',
-    jobNames: ['Roll Back Staging'],
+    jobNames: ['Roll Back Staging', 'Roll Back Previous Release'],
   },
   {
     key: 'failure-ticket',

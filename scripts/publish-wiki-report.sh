@@ -86,30 +86,30 @@ git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
 cat > Full-Stack-Architecture.md <<'WIKIEOF'
-# Full-Stack Architecture
+# Pipeline architecture
 
 ## Runtime
 
-`Browser → web (non-root nginx) → Node.js API → PostgreSQL`
+`Client → web service → API service → database`
 
 - Port 4173 exposes only the web service.
-- nginx serves React and proxies `/api/*`.
-- API and PostgreSQL use the private Compose backend network.
-- PostgreSQL data persists in the `postgres-data` volume.
+- The web container serves the application and proxies `/api/*`.
+- The API and the database use localhost. PostgreSQL is already installed on the server.
+- Database data persists in the existing PostgreSQL data directory.
 
 ## CI
 
 | Reusable workflow | Responsibility |
 | --- | --- |
-| `reusable-test.yml` | web/API quality, PostgreSQL integration, full-stack Playwright |
+| `reusable-test.yml` | web and API quality, database integration, browser end-to-end tests |
 | `reusable-security.yml` | dependency, secret, CodeQL, and Trivy scans |
-| `reusable-docker.yml` | CalVer web/API images, SBOM, provenance, digest metadata |
+| `reusable-docker.yml` | CalVer web and API images, SBOM, provenance, digest metadata |
 
 ## CD
 
 `cd.yml` downloads `release-bundle`, invokes `reusable-deploy.yml`, and invokes
 `reusable-rollback.yml` if deployment fails. Deployment uses immutable image digests.
-Database migrations are forward-only and PostgreSQL data is not rolled back.
+Database migrations are forward-only and database data is not rolled back.
 WIKIEOF
 
 if [ ! -f Pipeline-Overview.md ]; then
@@ -133,7 +133,7 @@ This wiki documents the CI/CD pipeline that runs on every pull request and every
 | 1 | Code Quality | ESLint, Prettier, TypeScript |
 | 2 | Security Analysis | npm audit, TruffleHog, CodeQL, Trivy |
 | 2.5 | Await Fix Decision | Early ticket when quality/security fails on `main` |
-| 3 | Unit Tests | Vitest with coverage artifact |
+| 3 | Unit Tests | Unit tests with a coverage artifact |
 | 4 | Build | Production `dist/`, SBOM, signed bundle, attestation |
 | 5 | E2E Tests | Playwright on downloaded `build-artifact` (5 browsers) |
 | 6 | Docker | Build & push image to GHCR (`:<sha>`, `:staging`) |
@@ -163,9 +163,9 @@ Artifacts are downloaded from the **Actions** tab on each workflow run.
 | `build-artifact` | 14 days | Production `dist/` | E2E job, Docker build |
 | `app-dist-<sha>-bundle` | 30 days | Tarball + CycloneDX SBOM + SHA256SUMS | Release audit |
 | Build attestation | — | GitHub provenance on tarball | Supply chain |
-| `coverage-report` | 7 days | Vitest HTML/LCOV | Coverage review |
+| `coverage-report` | 7 days | Unit-test coverage report | Coverage review |
 | `playwright-report` | 7 days | E2E HTML, traces, screenshots | Flaky test debug |
-| GHCR image | Registry | `ghcr.io/<owner>/<repo>:<sha>` | Staging deploy |
+| `release-bundle` | 14 days | Web files, API, checksums, scripts | CD |
 
 ## Downloading
 
@@ -341,10 +341,10 @@ ${FAILURE_ANALYSIS}
 
 | Artifact | Description |
 | --- | --- |
-| \`web-dist\` | Exact React production build |
-| \`release-bundle\` | Compose, scripts, web/API SBOMs, digest metadata |
+| \`web-dist\` | Exact production web build |
+| \`release-bundle\` | Web files, API, scripts, checksums, SBOMs |
 | GHCR images | \`platform-web\` + \`platform-api\` immutable digests |
-| \`web-coverage\` | React unit test coverage |
+| \`web-coverage\` | Web unit-test coverage |
 | \`playwright-report\` | E2E report and traces |
 
 ---

@@ -18,7 +18,7 @@ describe('pipeline stage mapping', () => {
 
   it('returns display names for stage keys', () => {
     expect(stageDisplayName('full-stack-tests')).toBe('Full-Stack Tests')
-    expect(stageDisplayName('compose-deploy')).toBe('Compose Deployment')
+    expect(stageDisplayName('compose-deploy')).toBe('Host Deployment')
   })
 
   it('summarizes jobs into pipeline stages', () => {

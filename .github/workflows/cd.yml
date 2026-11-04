@@ -56,7 +56,7 @@ jobs:
     name: Deploy Staging
     needs: prepare
     permissions:
-      packages: read # docker login + pull immutable digests from GHCR
+      contents: read
     uses: ./.github/workflows/reusable-deploy.yml
     with:
       artifact-name: cd-release

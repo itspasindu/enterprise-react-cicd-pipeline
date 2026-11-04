@@ -31,11 +31,11 @@ stage_display_name() {
     unit-tests) echo "Unit Tests" ;;
     build) echo "Build & Bundle Analysis" ;;
     e2e-tests) echo "E2E Tests" ;;
-    docker-build-push) echo "Build & Push Docker Image" ;;
+    docker-build-push) echo "Build Release Archive" ;;
     deploy-staging) echo "Deploy to Staging" ;;
     full-stack-tests) echo "Full-Stack Tests" ;;
-    container-release) echo "Web & API Container Release" ;;
-    compose-deploy) echo "Compose Deployment" ;;
+    container-release) echo "Release Archive" ;;
+    compose-deploy) echo "Host Deployment" ;;
     failure-ticket) echo "Failure Ticket" ;;
     *) echo "$1" ;;
   esac
@@ -50,7 +50,7 @@ stage_job_name() {
     unit-tests) echo "Unit Tests" ;;
     build) echo "Build & Bundle Analysis" ;;
     e2e-tests) echo "E2E Tests" ;;
-    docker-build-push) echo "Build & Push Docker Image" ;;
+    docker-build-push) echo "Build Release Archive" ;;
     deploy-staging) echo "Deploy to Staging" ;;
     full-stack-tests) echo "Test Full Stack" ;;
     container-release) echo "Package Release" ;;
@@ -119,37 +119,34 @@ EOF
     docker-build-push)
       cat <<'EOF'
 npm ci && npm run build
-docker build -t local-test .
-# Verify GHCR login and image tags in workflow logs
+bash scripts/create-release-bundle.sh
 EOF
       ;;
     deploy-staging)
       cat <<'EOF'
-# On staging host:
-cd /opt/enterprise-react-app
-IMAGE=ghcr.io/<owner>/<repo>:<sha> ./scripts/deploy.sh staging
-./scripts/health-check.sh
+# On the staging host:
+curl -f http://127.0.0.1:4173/api/ready
+DEPLOY_ROOT=/opt/platform /opt/platform/rollback-release.sh
 EOF
       ;;
     full-stack-tests)
       cat <<'EOF'
 npm ci && npm run lint && npm run test:coverage && npm run build
 cd server && npm ci && npm run lint && npm test && npm run test:integration
-POSTGRES_PASSWORD=local-password docker compose up -d --build --wait
-E2E_BASE_URL=http://127.0.0.1:4173 E2E_USE_REAL_API=1 npm run test:e2e
+bash scripts/ci-install-postgres.sh platform platform test-password
+WEB_ROOT="$PWD/dist" PORT=4173 DATABASE_URL=postgres://platform:test-password@127.0.0.1:5432/platform npm start --prefix server
 EOF
       ;;
     container-release)
       cat <<'EOF'
 npm run build
-docker build -t platform-web:local .
-docker build -t platform-api:local ./server
+VERSION=2026.10.1 GITHUB_SHA="$(git rev-parse HEAD)" GITHUB_REPOSITORY=owner/repo bash scripts/create-release-bundle.sh
 EOF
       ;;
     compose-deploy)
       cat <<'EOF'
-docker compose --env-file /opt/platform/current.env -f /opt/platform/compose.yml ps
 curl -f http://127.0.0.1:4173/api/ready
+tail -n 200 /opt/platform/api.log
 EOF
       ;;
     *)
@@ -173,7 +170,7 @@ stage_troubleshooting_md() {
 | --- | --- |
 | ESLint errors | Run \`npm run lint:fix\` locally; commit fixes |
 | Prettier drift | Run \`npm run format\` |
-| TypeScript errors | Run \`npx tsc --noEmit\` and fix reported files |
+| Type-check errors | Run \`npx tsc --noEmit\` and fix reported files |
 | Flaky on CI only | Confirm \`package-lock.json\` is committed; use \`npm ci\` |
 
 **Docs:** [CI-CD-PIPELINE.md — Code Quality](https://github.com/${GITHUB_REPOSITORY:-ORG/REPO}/blob/main/docs/CI-CD-PIPELINE.md)
@@ -200,7 +197,7 @@ EOF
 | Check | Action |
 | --- | --- |
 | Failing assertions | Run \`npm run test:coverage\` locally on the failing commit |
-| Coverage upload | Ensure tests write to \`coverage/\` as configured in Vitest |
+| Coverage upload | Ensure tests write to \`coverage/\` as configured for the unit tests |
 | Timeout / OOM | Split large tests; check for open handles |
 
 Download **coverage-report** from the Actions run artifacts for HTML/LCOV details.
@@ -212,7 +209,7 @@ EOF
 
 | Check | Action |
 | --- | --- |
-| Vite build errors | Run \`npm run build\` locally with the same \`VITE_*\` env vars |
+| Web build errors | Run \`npm run build\` locally with the same build-time environment variables |
 | SBOM / bundle step | Confirm CycloneDX output path matches workflow |
 | Attestation | Requires \`id-token: write\`; check org/repo Actions permissions |
 
@@ -239,12 +236,11 @@ EOF
 
 | Check | Action |
 | --- | --- |
-| Dockerfile / context | Run \`docker build .\` locally |
-| GHCR push denied | Verify \`GITHUB_TOKEN\` / \`packages: write\` permissions |
-| Trivy image scan | Review CRITICAL/HIGH findings in Security tab |
-| Missing dist | Build job must succeed first; image copies prebuilt \`dist/\` |
+| Missing web build | Confirm the \`web-dist\` artifact from the test workflow |
+| Archive checksum | Re-run \`bash scripts/create-release-bundle.sh\` on the same commit |
+| Dependency install | \`npm ci --prefix release/api --omit=dev\` must succeed on the runner |
 
-Image tags: \`ghcr.io/<owner>/<repo>:<sha>\` and \`:staging\`.
+Image archive: \`release-<version>-<sha>\` uploaded from Package Release.
 EOF
       ;;
     deploy-staging)
@@ -255,8 +251,8 @@ EOF
 | --- | --- |
 | SSH / known_hosts | Verify \`STAGING_SSH_KNOWN_HOSTS\` fingerprint matches server |
 | Tailscale | If using private VM, confirm \`TAILSCALE_AUTHKEY\` on staging environment |
-| Docker on host | Deploy user must be in \`docker\` group; \`docker info\` must work |
-| GHCR pull | Set \`GHCR_PULL_TOKEN\` (read:packages) on staging environment |
+| Node on host | \`node -v\` must work for the deploy user |
+| PostgreSQL | The existing database must accept \`POSTGRES_PASSWORD\` on 127.0.0.1 |
 | Health check | \`curl -I http://<host>:4173/\` — app listens on port **4173** |
 | Rollback | Previous image stored in \`/opt/enterprise-react-app/previous-image.txt\` |
 

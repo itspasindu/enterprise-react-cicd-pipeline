@@ -1,83 +1,59 @@
-# Full-Stack Setup Guide
+# Pipeline setup
+
+Secret inventory: [SECRETS.md](SECRETS.md). Day-2 commands: [RUNBOOK.md](RUNBOOK.md). Release rules: [RELEASE.md](RELEASE.md).
 
 ## Local prerequisites
 
-- Node.js 20+
-- npm 10+
-- Docker Engine with Compose v2
+- Node.js 20+ and npm 10+, matching CI
+- PostgreSQL already running locally
 - Git
 
-## Local application
+## Local workload
+
+PostgreSQL must already be accepting connections.
 
 ```bash
-cp .env.example .env
-# Set a strong POSTGRES_PASSWORD
 npm ci
 npm run build
-docker compose up -d --build --wait
-```
-
-Open `http://localhost:4173`.
-
-```bash
-docker compose ps
-docker compose logs -f web api postgres
-curl -f http://localhost:4173/api/ready
-```
-
-Stop without deleting data:
-
-```bash
-docker compose down
-```
-
-Use `docker compose down -v` only when you intentionally want to delete PostgreSQL data.
-
-## API development
-
-Run PostgreSQL with Compose, then start the API locally:
-
-```bash
-docker compose up -d postgres
 cd server
 npm ci
-export DATABASE_URL=postgres://platform:<password>@localhost:5432/platform
+export DATABASE_URL=postgres://platform:<password>@127.0.0.1:5432/platform
 npm run migrate
-npm run dev
+WEB_ROOT=../dist PORT=4173 npm start
 ```
 
-The API listens on port 3001.
+Open `http://127.0.0.1:4173`.
+
+```bash
+curl -f http://127.0.0.1:4173/api/ready
+```
 
 ## Staging server
 
 Ubuntu host requirements:
 
+Confirm Node.js, jq, and curl:
+
 ```bash
-sudo apt-get update
-sudo apt-get install -y docker.io jq
-sudo usermod -aG docker "$USER"
-# log out/in, then:
-docker --version
+node -v
 jq --version
+curl --version
 ```
 
-Docker Compose v2 (`docker compose`) is required. If the VM has outbound internet you can install the CLI plugin yourself; **if it cannot reach GitHub/DNS** (common on Tailscale-only VMs), CD downloads Compose on the Actions runner and copies it to `~/.docker/cli-plugins/docker-compose` over SSH — no outbound access needed on the VM.
+PostgreSQL is already installed. It should accept the deploy user on `127.0.0.1` with the password stored as `POSTGRES_PASSWORD`. The pipeline does not install the database or Node.js.
 
 Create the deployment directory and grant ownership to the deploy user (recommended):
 
 ```bash
 sudo mkdir -p /opt/platform
 sudo chown -R "$USER":"$USER" /opt/platform
-sudo usermod -aG docker "$USER"
 ```
 
 If `/opt/platform` is not writable, CD automatically deploys to `~/platform` instead.
 
-Log out and back in, then confirm `docker info` works without `sudo`.
+Only SSH and port 4173 need to be reachable from the Actions runner. PostgreSQL stays on localhost.
 
-Only SSH and application port 4173 need to be reachable from the Actions runner. PostgreSQL and the API are not exposed directly.
-
-Do not run `npm run preview`, Vite, or any other Node process on port 4173 on the staging VM. The `platform-web` container is the only listener on that port. A leftover preview will be killed during deploy and, if something restarts it, Compose fails with `address already in use`.
+Do not run any other process on port 4173. The Node.js process started by CD is the only listener on that port.
 
 ## GitHub staging environment
 
@@ -93,7 +69,6 @@ Add:
 | `STAGING_SSH_KNOWN_HOSTS` | verified `ssh-keyscan` output |
 | `POSTGRES_PASSWORD` | strong database password |
 | `TAILSCALE_AUTHKEY` | optional reusable/ephemeral auth key |
-| `PIPELINE_GITHUB_TOKEN` | fine-grained token that can read this repo's Actions (`actions:read`) and ideally open CI failure issues (`issues:read`). CD writes it to the API as `GITHUB_TOKEN`. The built-in Actions token expires when the job ends, so it cannot drive the live status page. **Required** for `/api/pipelines/overview` on staging — without it the page returns 503. |
 
 Generate host keys from a trusted network path:
 
@@ -103,7 +78,7 @@ ssh-keyscan -t ed25519,rsa <staging-host>
 
 Verify fingerprints independently before saving them.
 
-## GHCR
+## Release archive
 
 The Docker release workflow publishes:
 
@@ -111,7 +86,7 @@ The Docker release workflow publishes:
 - `platform-api:YYYY.MM.N`
 - immutable digest references
 
-The CD runner downloads both images using `GITHUB_TOKEN` and streams them to staging. The VM itself does not need DNS or outbound connectivity to `ghcr.io`.
+CD copies the release archive to the server with `GITHUB_TOKEN` used only for Actions. The server does not pull container images. Node.js on the host starts the API from `/opt/platform/current`.
 
 ## First release
 
@@ -144,12 +119,11 @@ Enable Wikis, create the first page once, and add repository secret `WIKI_TOKEN`
 
 | Symptom | Check |
 | --- | --- |
-| API not ready | `docker compose --env-file /opt/platform/current.env -f /opt/platform/compose.yml logs api postgres` |
-| Database authentication failure | staging `POSTGRES_PASSWORD`; existing volume retains original DB credentials |
-| Password changed after first deploy | update the role inside PostgreSQL or recreate the volume only if data can be deleted |
-| Web returns 502 | API health and Compose backend network |
-| Pipeline overview 502 `EAI_AGAIN` / unreachable | API cannot resolve `api.github.com`. Confirm the API service is on the `egress` network (not only internal `backend`), and that the VM has outbound DNS/HTTPS. Compose pins public DNS (`1.1.1.1` / `8.8.8.8`) on the API for this. On the VM: `docker compose --env-file current.env exec api wget -qO- https://api.github.com/zen` |
-| Contact form fails | `/api/contacts` response and API logs |
+| API not ready | `tail -n 200 /opt/platform/api.log` and `curl -f http://127.0.0.1:4173/api/ready` |
+| Database authentication failure | staging `POSTGRES_PASSWORD`; the existing database keeps its current role password |
+| Password changed after first deploy | update the database role |
+| Web returns 502 | The Node.js process on port 4173 |
+| Sample write fails | `/api/contacts` response and API logs |
 | Image unavailable | CI release job and digest in `release-metadata.json` |
 | SSH host key failure | refresh and independently verify `STAGING_SSH_KNOWN_HOSTS` |
 | Deploy fails | CD automatically calls reusable rollback |

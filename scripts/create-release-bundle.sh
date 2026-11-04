@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Assemble an immutable release/ directory for CD.
-# Required env: VERSION WEB_DIGEST_REF API_DIGEST_REF WEB_IMAGE_NAME API_IMAGE_NAME
-#               WEB_IMAGE_ID API_IMAGE_ID GITHUB_SHA GITHUB_REPOSITORY
-# Optional: GITHUB_RUN_ID GITHUB_RUN_ATTEMPT ROOT OUT
+# Pack the web build and API into release/ for CD. No container images.
+# Required env: VERSION GITHUB_SHA GITHUB_REPOSITORY
+# Optional: GITHUB_RUN_ID ROOT OUT SKIP_NPM_CI
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,148 +9,72 @@ ROOT="${ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 OUT="${OUT:-${ROOT}/release}"
 
 : "${VERSION:?VERSION is required}"
-: "${WEB_DIGEST_REF:?WEB_DIGEST_REF is required}"
-: "${API_DIGEST_REF:?API_DIGEST_REF is required}"
-: "${WEB_IMAGE_NAME:?WEB_IMAGE_NAME is required}"
-: "${API_IMAGE_NAME:?API_IMAGE_NAME is required}"
-: "${WEB_IMAGE_ID:?WEB_IMAGE_ID is required}"
-: "${API_IMAGE_ID:?API_IMAGE_ID is required}"
 : "${GITHUB_SHA:?GITHUB_SHA is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-
-# shellcheck source=lib/validate-image-ref.sh
-source "${SCRIPT_DIR}/lib/validate-image-ref.sh"
-
-validate_image_reference "$WEB_DIGEST_REF"
-validate_image_reference "$API_DIGEST_REF"
-validate_image_id "$WEB_IMAGE_ID"
-validate_image_id "$API_IMAGE_ID"
 
 if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "GITHUB_SHA must be the full 40-character commit SHA, got: ${GITHUB_SHA}" >&2
   exit 1
 fi
+if [[ ! "$VERSION" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]+$ ]]; then
+  echo "VERSION must look like YYYY.MM.N, got: ${VERSION}" >&2
+  exit 1
+fi
+if [ ! -f "${ROOT}/dist/index.html" ]; then
+  echo "Missing ${ROOT}/dist/index.html. Build the web assets before packaging." >&2
+  exit 1
+fi
 
-WEB_DIGEST="${WEB_DIGEST_REF##*@}"
-API_DIGEST="${API_DIGEST_REF##*@}"
-WEB_PUBLISH_TAG="${WEB_IMAGE_NAME}:${VERSION}"
-API_PUBLISH_TAG="${API_IMAGE_NAME}:${VERSION}"
 CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
 rm -rf "$OUT"
-mkdir -p "${OUT}/lib"
+mkdir -p "${OUT}/web" "${OUT}/api" "${OUT}/lib"
 
-# Keep ${WEB_IMAGE}/${API_IMAGE} placeholders: digest refs do not survive docker save/load
-# on typical staging daemons. Deploy injects imageId (config digest) at runtime.
-python3 - "$ROOT/compose.yml" "$OUT/compose.yml" <<'PY'
-import re
-import sys
-from pathlib import Path
+cp -a "${ROOT}/dist/." "${OUT}/web/"
+tar -C "${ROOT}/server" \
+  --exclude node_modules \
+  --exclude tests \
+  --exclude coverage \
+  -cf - . | tar -C "${OUT}/api" -xf -
 
-src, dest = sys.argv[1:3]
-images = {"web": "${WEB_IMAGE}", "api": "${API_IMAGE}"}
-out = []
-service = None
-skip_build = False
-build_indent = 0
-
-for line in Path(src).read_text(encoding="utf-8").splitlines(keepends=True):
-    svc = re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", line)
-    if svc:
-        service = svc.group(1)
-        skip_build = False
-
-    if skip_build:
-        if not line.strip():
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent > build_indent:
-            continue
-        skip_build = False
-
-    if re.match(r"^    build:\s*(#.*)?$", line):
-        skip_build = True
-        build_indent = len(line) - len(line.lstrip(" "))
-        continue
-
-    if service in images and re.match(r"^    image:\s*", line):
-        out.append(f"    image: {images[service]}\n")
-        continue
-
-    out.append(line)
-
-Path(dest).write_text("".join(out), encoding="utf-8")
-PY
-
-cp "${ROOT}/scripts/deploy-stack.sh" \
-  "${ROOT}/scripts/rollback-stack.sh" \
-  "${ROOT}/scripts/health-check.sh" \
-  "${ROOT}/scripts/transfer-release-images.sh" \
-  "${OUT}/"
-cp "${ROOT}/scripts/lib/image-archive.sh" \
-  "${ROOT}/scripts/lib/validate-image-ref.sh" \
-  "${ROOT}/scripts/lib/compose-egress.sh" \
-  "${OUT}/lib/"
-
-for sbom in web-sbom.cyclonedx.json api-sbom.cyclonedx.json; do
-  if [ -f "${ROOT}/${sbom}" ]; then
-    cp "${ROOT}/${sbom}" "${OUT}/"
-  elif [ -f "${sbom}" ]; then
-    cp "${sbom}" "${OUT}/"
-  else
-    echo "Missing ${sbom}" >&2
-    exit 1
+if [ "${SKIP_NPM_CI:-}" != "1" ]; then
+  npm ci --prefix "${OUT}/api" --omit=dev
+  npm sbom --prefix "${OUT}/api" --omit=dev --sbom-format cyclonedx > "${OUT}/api.cdx.json"
+  if [ -f "${ROOT}/package-lock.json" ]; then
+    npm sbom --prefix "${ROOT}" --omit=dev --sbom-format cyclonedx > "${OUT}/web.cdx.json"
   fi
-done
+fi
 
-chmod +x "${OUT}/deploy-stack.sh" "${OUT}/rollback-stack.sh" "${OUT}/health-check.sh" "${OUT}/transfer-release-images.sh"
+cp "${SCRIPT_DIR}/deploy-release.sh" "${SCRIPT_DIR}/rollback-release.sh" "${SCRIPT_DIR}/health-check.sh" "$OUT/"
+cp "${SCRIPT_DIR}/lib/host-process.sh" "${OUT}/lib/host-process.sh"
+chmod 0755 "${OUT}/deploy-release.sh" "${OUT}/rollback-release.sh" "${OUT}/health-check.sh" "${OUT}/lib/host-process.sh"
 
-jq -n \
-  --argjson schemaVersion 1 \
-  --arg repository "$GITHUB_REPOSITORY" \
-  --arg commit "$GITHUB_SHA" \
-  --arg version "$VERSION" \
-  --arg createdAt "$CREATED_AT" \
-  --arg workflowRunId "${GITHUB_RUN_ID:-}" \
-  --arg workflowRunAttempt "${GITHUB_RUN_ATTEMPT:-}" \
-  --arg webPublishTag "$WEB_PUBLISH_TAG" \
-  --arg apiPublishTag "$API_PUBLISH_TAG" \
-  --arg webDigest "$WEB_DIGEST" \
-  --arg apiDigest "$API_DIGEST" \
-  --arg webRef "$WEB_DIGEST_REF" \
-  --arg apiRef "$API_DIGEST_REF" \
-  --arg webId "$WEB_IMAGE_ID" \
-  --arg apiId "$API_IMAGE_ID" \
-  '{
-    schemaVersion: $schemaVersion,
-    repository: $repository,
-    commit: $commit,
-    version: $version,
-    createdAt: $createdAt,
-    workflowRunId: $workflowRunId,
-    workflowRunAttempt: $workflowRunAttempt,
+export VERSION GITHUB_SHA GITHUB_REPOSITORY CREATED_AT
+export GITHUB_RUN_ID="${GITHUB_RUN_ID:-}"
+export OUT_JSON="${OUT}/release.json"
+export OUT_META="${OUT}/release-metadata.json"
+node --input-type=module -e '
+  import { writeFileSync } from "node:fs"
+  const release = {
+    version: process.env.VERSION,
+    commit: process.env.GITHUB_SHA,
+    createdAt: process.env.CREATED_AT,
+    workflowRunId: process.env.GITHUB_RUN_ID || "",
+    repository: process.env.GITHUB_REPOSITORY,
+    directoryName: `${process.env.VERSION}-${process.env.GITHUB_SHA}`,
+    runtime: "host-node",
     images: {
-      web: { tag: $webPublishTag, digest: $webDigest, reference: $webRef, imageId: $webId },
-      api: { tag: $apiPublishTag, digest: $apiDigest, reference: $apiRef, imageId: $apiId }
-    }
-  }' > "${OUT}/release.json"
-
-jq '{
-  version: .version,
-  sha: .commit,
-  webImage: .images.web.reference,
-  apiImage: .images.api.reference,
-  webImageId: .images.web.imageId,
-  apiImageId: .images.api.imageId
-}' "${OUT}/release.json" > "${OUT}/release-metadata.json"
+      web: { tag: null, digest: null, reference: null, imageId: null },
+      api: { tag: null, digest: null, reference: null, imageId: null },
+    },
+  }
+  const json = JSON.stringify(release, null, 2) + "\n"
+  writeFileSync(process.env.OUT_JSON, json)
+  writeFileSync(process.env.OUT_META, json)
+'
 
 (
   cd "$OUT"
-  # shellcheck disable=SC2038
-  find . -type f ! -name checksums.txt -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
-) > "${OUT}/checksums.txt"
+  find . -type f ! -name checksums.txt -print0 | sort -z | xargs -0 sha256sum > checksums.txt
+)
 
-validate_release_compose_placeholders "${OUT}/compose.yml"
-
-echo "Immutable release bundle written to ${OUT}"
-jq '{version, commit, images}' "${OUT}/release.json"
+echo "Release bundle ${VERSION} ${GITHUB_SHA}"
