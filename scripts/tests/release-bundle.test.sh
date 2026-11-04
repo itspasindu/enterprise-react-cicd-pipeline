@@ -40,6 +40,8 @@ test -f "${WORK}/release/web/index.html"
 test -f "${WORK}/release/api/src/index.js"
 test ! -d "${WORK}/release/api/tests"
 grep -q -- '--package-lock-only' "${ROOT}/scripts/create-release-bundle.sh"
+grep -q 'include-hidden-files: true' "${ROOT}/.github/workflows/reusable-release.yml"
+grep -q 'include-hidden-files: true' "${ROOT}/.github/workflows/cd.yml"
 test -x "${WORK}/release/deploy-release.sh"
 test -f "${WORK}/release/lib/host-process.sh"
 
