@@ -263,5 +263,110 @@ describe('pipelines API', () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  it('reads release identity from the artifact name and does not download the archive', async () => {
+    const fetchImpl = vi.fn(async url => {
+      const href = String(url)
+      if (href.includes('/zip')) {
+        throw new Error('overview must not download the release archive')
+      }
+      if (href.includes('/actions/workflows/ci.yml/runs')) {
+        return { ok: true, text: async () => JSON.stringify({ workflow_runs: [] }) }
+      }
+      if (href.includes('/actions/workflows/cd.yml/runs')) {
+        return {
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              workflow_runs: [
+                {
+                  id: 200,
+                  name: 'CD',
+                  path: '.github/workflows/cd.yml',
+                  status: 'completed',
+                  conclusion: 'success',
+                  event: 'workflow_run',
+                  head_branch: 'main',
+                  head_sha: 'fad687aac2124d18df0a3b5d9ca89f152780f0b9',
+                  html_url: 'https://github.com/acme/platform/actions/runs/200',
+                  created_at: '2026-11-04T00:00:00Z',
+                  updated_at: '2026-11-04T00:05:00Z',
+                  actor: { login: 'alice' },
+                },
+              ],
+            }),
+        }
+      }
+      if (href.includes('/actions/runs/200/jobs')) {
+        return { ok: true, text: async () => JSON.stringify({ jobs: [] }) }
+      }
+      if (href.includes('/actions/runs/200/artifacts')) {
+        return {
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              artifacts: [
+                { id: 1, name: 'cd-release', expired: false },
+                {
+                  id: 2,
+                  name: 'release-2026.11.4-fad687aac2124d18df0a3b5d9ca89f152780f0b9',
+                  expired: false,
+                },
+              ],
+            }),
+        }
+      }
+      if (href.includes('/actions/runs/200')) {
+        return {
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              id: 200,
+              name: 'CD',
+              path: '.github/workflows/cd.yml',
+              status: 'completed',
+              conclusion: 'success',
+              event: 'workflow_run',
+              head_branch: 'main',
+              head_sha: 'fad687aac2124d18df0a3b5d9ca89f152780f0b9',
+              html_url: 'https://github.com/acme/platform/actions/runs/200',
+              created_at: '2026-11-04T00:00:00Z',
+              updated_at: '2026-11-04T00:05:00Z',
+              actor: { login: 'alice' },
+            }),
+        }
+      }
+      if (href.includes('/issues')) {
+        return { ok: true, text: async () => JSON.stringify([]) }
+      }
+      if (href.includes('/rate_limit')) {
+        return { ok: true, text: async () => JSON.stringify({ resources: {} }) }
+      }
+      return { ok: true, status: 200, text: async () => '{}' }
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = fetchImpl
+    try {
+      const app = createApp({
+        pool: { query: vi.fn() },
+        config: baseConfig({
+          githubToken: 'ghp_test',
+          githubOwner: 'acme',
+          githubRepo: 'platform',
+        }),
+      })
+      const response = await request(app).get('/api/pipelines/overview')
+      expect(response.status).toBe(200)
+      expect(response.body.release).toMatchObject({
+        version: '2026.11.4',
+        commit: 'fad687aac2124d18df0a3b5d9ca89f152780f0b9',
+        sourceArtifact: 'release-2026.11.4-fad687aac2124d18df0a3b5d9ca89f152780f0b9',
+      })
+      expect(fetchImpl.mock.calls.some(call => String(call[0]).includes('/zip'))).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 

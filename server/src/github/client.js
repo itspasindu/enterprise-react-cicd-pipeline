@@ -47,9 +47,13 @@ export function createGithubClient({ token, owner, repo, fetchImpl = fetch }) {
             'User-Agent': 'platform-api-pipeline-monitor',
           },
           redirect: 'follow',
+          signal: AbortSignal.timeout(20_000),
         })
         break
       } catch (error) {
+        if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+          throw new GithubApiError('GitHub API timed out', { status: 502 })
+        }
         if (attempt < maxAttempts && isTransientNetworkError(error)) {
           await new Promise(resolve => setTimeout(resolve, 250 * attempt))
           continue

@@ -1,10 +1,6 @@
 /** Stage keys aligned with scripts/lib/ci-report-lib.sh */
 import { GithubApiError } from './client.js'
-import {
-  extractZipEntry,
-  parseReleaseIdentityFromArtifactName,
-  parseReleaseIdentityFromJson,
-} from './zip.js'
+import { parseReleaseIdentityFromArtifactName } from './zip.js'
 import { mapIssueComment, parseFailureReport } from './failure-report.js'
 
 const DEPLOY_TIMELINE_STEPS = [
@@ -15,8 +11,6 @@ const DEPLOY_TIMELINE_STEPS = [
   { key: 'install', label: 'Install release', match: /^install release/i },
   { key: 'smoke', label: 'External smoke', match: /smoke|external smoke/i },
 ]
-
-const RELEASE_ARTIFACT_NAMES = new Set(['release-bundle', 'cd-release'])
 
 export const STAGE_DEFINITIONS = [
   { key: 'full-stack-tests', name: 'Full-Stack Tests', jobNames: ['Test Full Stack'] },
@@ -369,42 +363,16 @@ export function createPipelineService({ github, cache, stagingUrl, probeFn }) {
     return cached(`release-identity:${runId}`, async () => {
       try {
         const payload = await github.listArtifactsForRun(runId)
-        const artifacts = payload.artifacts || []
-        const preferred =
-          artifacts.find(a => RELEASE_ARTIFACT_NAMES.has(a.name) && !a.expired) ||
-          artifacts.find(a => /^release-\d{4}\.\d{1,2}\.\d+-/i.test(a.name) && !a.expired) ||
-          null
-
-        let identity = preferred ? parseReleaseIdentityFromArtifactName(preferred.name) : null
-
-        if (preferred && !preferred.expired) {
-          try {
-            const zip = await github.downloadArtifactZip(preferred.id)
-            const file =
-              extractZipEntry(zip, 'release.json') || extractZipEntry(zip, 'release-metadata.json')
-            if (file) {
-              const fromJson = parseReleaseIdentityFromJson(file)
-              if (fromJson) {
-                identity = {
-                  ...fromJson,
-                  sourceArtifact: preferred.name,
-                  sourceRunId: Number(runId),
-                }
-              }
-            }
-          } catch {
-            // Fall back to name parse / null — do not fail the board
-          }
+        const artifacts = (payload.artifacts || []).filter(artifact => !artifact.expired)
+        // Versioned names carry CalVer and the commit. release-bundle and cd-release
+        // are the full deploy tree, so downloading them blocks the overview response.
+        const versioned = artifacts.find(artifact => parseReleaseIdentityFromArtifactName(artifact.name))
+        if (!versioned) return null
+        return {
+          ...parseReleaseIdentityFromArtifactName(versioned.name),
+          sourceArtifact: versioned.name,
+          sourceRunId: Number(runId),
         }
-
-        if (identity) {
-          return {
-            ...identity,
-            sourceArtifact: preferred?.name || identity.sourceArtifact || null,
-            sourceRunId: Number(runId),
-          }
-        }
-        return null
       } catch {
         return null
       }
