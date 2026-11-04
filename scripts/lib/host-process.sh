@@ -2,6 +2,15 @@
 # Start the API from the current release symlink. Node and PostgreSQL are already on the host.
 set -euo pipefail
 
+# Shell redirection truncates an existing file, which needs write permission on
+# that file. A writable deploy directory is enough to remove and recreate it.
+replace_unwritable() {
+  local path="$1"
+  if [ -e "$path" ] && [ ! -w "$path" ]; then
+    rm -f "$path"
+  fi
+}
+
 start_release_process() {
   local deploy_root="$1"
   local pidfile="${deploy_root}/api.pid"
@@ -26,6 +35,9 @@ start_release_process() {
       kill -9 "$old" 2>/dev/null || true
     fi
   fi
+
+  replace_unwritable "$pidfile"
+  replace_unwritable "$logfile"
 
   nohup bash -c '
     trap "" HUP
