@@ -42,6 +42,7 @@ test ! -d "${WORK}/release/api/tests"
 grep -q -- '--package-lock-only' "${ROOT}/scripts/create-release-bundle.sh"
 grep -q 'include-hidden-files: true' "${ROOT}/.github/workflows/reusable-release.yml"
 grep -q 'include-hidden-files: true' "${ROOT}/.github/workflows/cd.yml"
+grep -q 'replace_unwritable "${DEPLOY_ROOT}/previous-release.json"' "${ROOT}/scripts/deploy-release.sh"
 test -x "${WORK}/release/deploy-release.sh"
 test -f "${WORK}/release/lib/host-process.sh"
 

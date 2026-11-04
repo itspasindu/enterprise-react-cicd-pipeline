@@ -49,6 +49,7 @@ CURRENT_LINK="${DEPLOY_ROOT}/current"
 if [ -L "$CURRENT_LINK" ] || [ -d "$CURRENT_LINK" ]; then
   previous="$(readlink -f "$CURRENT_LINK" || true)"
   if [ -n "${previous}" ] && [ "$previous" != "$DEST" ] && [ -f "${previous}/release.json" ]; then
+    replace_unwritable "${DEPLOY_ROOT}/previous-release.json"
     jq -c --arg directory "$previous" '. + {directory: $directory}' "${previous}/release.json" \
       > "${DEPLOY_ROOT}/previous-release.json"
   fi
@@ -64,6 +65,7 @@ DATABASE_URL="$(
 )"
 
 umask 077
+replace_unwritable "${DEPLOY_ROOT}/current.env"
 {
   printf 'NODE_ENV=%q\n' production
   printf 'PORT=%q\n' "$PORT"
