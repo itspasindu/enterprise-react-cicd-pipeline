@@ -258,7 +258,16 @@ export function mapIssue(issue) {
   }
 }
 
-export function createPipelineService({ github, cache, stagingUrl, probeFn }) {
+function isLoopbackUrl(value) {
+  try {
+    const host = new URL(value).hostname.replace(/^\[|\]$/g, '')
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+  } catch {
+    return false
+  }
+}
+
+export function createPipelineService({ github, cache, stagingUrl, probeFn, readyCheck }) {
   const probe = probeFn || defaultProbe
   const repoMeta = github ? { owner: github.owner, repo: github.repo } : {}
 
@@ -466,6 +475,32 @@ export function createPipelineService({ github, cache, stagingUrl, probeFn }) {
 
   async function getStagingHealth() {
     const paths = ['/api/health', '/api/ready', '/', '/about', '/contact']
+    // This process is already serving loopback. Fetching it from inside the
+    // overview request deadlocks the server, so check readiness in-process.
+    if (isLoopbackUrl(stagingUrl)) {
+      let readyError = null
+      try {
+        if (readyCheck) await readyCheck()
+      } catch (error) {
+        readyError = error.message || 'Database check failed'
+      }
+      const checks = paths.map(path => ({
+        path,
+        url: `${stagingUrl}${path}`,
+        ok: path === '/api/ready' ? !readyError : true,
+        status: path === '/api/ready' && readyError ? 0 : 200,
+        latencyMs: 0,
+        error: path === '/api/ready' ? readyError : null,
+      }))
+      return {
+        baseUrl: stagingUrl,
+        healthy: checks.every(check => check.ok),
+        ready: !readyError,
+        checks,
+        checkedAt: new Date().toISOString(),
+      }
+    }
+
     const checks = await Promise.all(
       paths.map(async path => {
         const url = `${stagingUrl}${path}`

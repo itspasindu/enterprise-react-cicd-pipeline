@@ -56,6 +56,7 @@ export function createApp({ pool, config = {} }) {
     github,
     cache: createTtlCache(30_000),
     stagingUrl,
+    readyCheck: () => pool.query('SELECT 1'),
   })
 
   app.get('/api/health', (_request, response) => {
