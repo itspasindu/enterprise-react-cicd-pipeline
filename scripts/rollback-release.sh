@@ -15,7 +15,7 @@ if [ ! -f "$PREVIOUS" ]; then
   exit 0
 fi
 
-directory="$(jq -er '.directory // empty' "$PREVIOUS")"
+directory="$(jq -r '.directory // empty' "$PREVIOUS")"
 if [ -z "$directory" ] || [ ! -d "$directory" ]; then
   echo "Previous release directory is not on this host; rollback skipped."
   exit 0
