@@ -364,6 +364,12 @@ describe('pipelines API', () => {
         sourceArtifact: 'release-2026.11.4-fad687aac2124d18df0a3b5d9ca89f152780f0b9',
       })
       expect(fetchImpl.mock.calls.some(call => String(call[0]).includes('/zip'))).toBe(false)
+      expect(
+        fetchImpl.mock.calls.some(call => {
+          const href = String(call[0])
+          return href.includes('localhost') || href.includes('127.0.0.1')
+        })
+      ).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
     }
