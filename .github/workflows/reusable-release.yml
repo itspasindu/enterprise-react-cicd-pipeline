@@ -57,8 +57,10 @@ jobs:
           name: release-bundle
           path: release/
           retention-days: 14
+          include-hidden-files: true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ steps.meta.outputs.version }}-${{ github.sha }}
           path: release/
           retention-days: 30
+          include-hidden-files: true

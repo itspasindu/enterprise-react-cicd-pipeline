@@ -51,6 +51,7 @@ jobs:
           name: cd-release
           path: release/
           retention-days: 7
+          include-hidden-files: true
 
   deploy:
     name: Deploy Staging
