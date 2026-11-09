@@ -144,7 +144,7 @@ jobs:
           echo "/api/pipelines/status: configured"
           OVERVIEW_BODY="$(mktemp)"
           OVERVIEW_CODE="$(
-            curl --show-error --silent --max-time 60 \
+            curl --show-error --silent --max-time 180 \
               -o "$OVERVIEW_BODY" -w '%{http_code}' \
               "http://${HOST}:4173/api/pipelines/overview" || true
           )"
