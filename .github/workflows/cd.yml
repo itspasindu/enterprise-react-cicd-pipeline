@@ -26,9 +26,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      contents: read
     outputs:
       source-run-id: ${{ steps.run.outputs.id }}
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: '20'
       - name: Select CI run
         id: run
         env:
@@ -41,11 +49,22 @@ jobs:
           else
             echo "id=$AUTO_RUN_ID" >> "$GITHUB_OUTPUT"
           fi
-      - name: Download CI release bundle
+      - name: Validate source run and signed release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ steps.run.outputs.id }}
-        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name release-bundle --dir release
+          RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid CI run ID' >&2; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > source-run.json
+          node scripts/release-trust.mjs run source-run.json
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name release-bundle --dir signed-release
+          node scripts/release-trust.mjs verify signed-release/release.tar.gz
+          mkdir release
+          tar -xzf signed-release/release.tar.gz -C release
+          node scripts/release-trust.mjs metadata release/release.json source-run.json
+          (cd release && sha256sum -c checksums.txt)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cd-release

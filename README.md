@@ -1,6 +1,8 @@
 # CI/CD Pipeline
 
-Reusable GitHub Actions pipeline for a sample workload. Pull requests are tested and scanned. A merge to `main` builds two container images once, publishes immutable digests, and deploys them to staging over SSH. A failed deploy rolls the web and API images back. Database data and applied migrations are left in place.
+Reusable GitHub Actions pipeline for a sample workload. Pull requests are tested and scanned. A merge to `main` packages the tested web build and API into a versioned release archive and deploys it to staging over SSH. A failed deploy restores the previous application release. Database data and applied migrations are left in place.
+
+CI and CD run without Docker. CI installs PostgreSQL directly on the runner and uses native security scanners. Staging runs Node.js and an existing local PostgreSQL installation. The Dockerfiles, Compose configuration, and older container deployment scripts are legacy alternatives; the active workflows do not invoke them.
 
 The workload is a web service, an API service, and a private database. This repository demonstrates the pipeline that builds, scans, and ships that workload.
 

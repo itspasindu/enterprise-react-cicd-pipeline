@@ -1,6 +1,6 @@
 # Releases
 
-Package Release runs on a push to `main` after tests and security succeed, and on a manual CI run. Pull requests run tests and security only. They do not publish images or start CD.
+Package Release runs on a push to `main` after tests and security succeed, and on a manual CI run. Pull requests run tests and security only. They do not package releases or start CD.
 
 ## Version and tags
 
@@ -26,7 +26,7 @@ The runner installs API production dependencies before packing the archive, then
 | `release-bundle` | What CD downloads |
 | `release-<CalVer>-<full-sha>` | Immutable copy. The name is not `latest`. |
 
-`release-bundle` contains:
+`release-bundle` and the immutable release artifact contain `release.tar.gz` and its detached Ed25519 signature, `release.tar.gz.sig`. CD verifies the archive before extracting it. The archive contains:
 
 - `release.json` — version, full commit SHA, workflow run id, repository, directory name
 - `release-metadata.json` — the same document
@@ -37,6 +37,38 @@ The runner installs API production dependencies before packing the archive, then
 - CycloneDX SBOMs for the web and API lockfiles
 
 CD copies that bundle to a short-lived artifact named `cd-release` (7 days) and deploys from the copy.
+
+### Signing setup (required before the next release)
+
+Create a GitHub Environment named `release-signing`. Restrict its deployment branches to `main` only. Store the PEM private key in that environment's `RELEASE_SIGNING_PRIVATE_KEY` secret, not a repository secret that other branches can access. Store the matching public PEM key in the repository Actions variable `RELEASE_SIGNING_PUBLIC_KEY`, so CD can verify without accessing the private key.
+
+Generate the key pair on a trusted machine, outside the repository:
+
+```bash
+umask 077
+openssl genpkey -algorithm ED25519 -out release-private.pem
+openssl pkey -in release-private.pem -pubout -out release-public.pem
+```
+
+Copy the full PEM contents into the secret and variable. Keep the private key out of source control and logs. Back it up in an approved secret store. Replacing the trusted public key makes older signatures fail verification; retain the old key only through an explicit rotation policy. Signing and verification fail closed when keys are missing or invalid. Existing unsigned artifacts must be rebuilt through CI.
+
+### Provenance policy
+
+Both automatic and manual CD validate the GitHub Actions run before downloading artifacts. The run must belong to this repository (including its head repository), use `.github/workflows/ci.yml`, originate on `main` through `push` or `workflow_dispatch`, and have completed successfully. Manual CI on other branches runs checks but cannot package a release.
+
+The trusted verifier is checked out from `main`. It verifies the archive signature before extraction, then binds `release.json` to the API-confirmed repository, run ID, run attempt, and full commit SHA. It also validates the runtime, version, directory name, and file checksums. Re-running only some jobs can leave an artifact from an earlier attempt; that artifact is rejected and requires a fresh release. No artifact scripts run and no staging secrets are used during preparation. The verified extracted files become the same CD run's `cd-release` artifact, which the existing deployment workflow consumes over SSH.
+
+### Deployment safety tests
+
+`Release Trust and Deployment Failure Tests` runs on every CI execution and gates packaging through `Test Full Stack`.
+
+```bash
+node --test scripts/tests/release-trust.test.mjs
+bash scripts/tests/release-bundle.test.sh
+bash scripts/tests/deployment-failures.test.sh
+```
+
+The shell tests require Bash, Node.js, jq, GNU utilities, and symlink support. They invoke the real deployment and rollback scripts in disposable directories, injecting process and migration effects. They check checksum rejection before activation, failed migrations, failed readiness with preserved database state, restoration of the previous application, and a successful deployment. They do not replace a staging exercise with a real PostgreSQL database and Node service.
 
 ## Required pull request checks
 
@@ -68,7 +100,7 @@ Rollback restores the previous release directory only. It does not run down migr
 ## What a normal `main` push does
 
 1. CI runs tests and security in parallel.
-2. Package Release builds from the `web-dist` artifact, scans, pushes, and uploads `release-bundle`.
+2. Package Release packages the `web-dist` artifact with the API, production dependencies, SBOMs, and checksums, then uploads `release-bundle`.
 3. The CD workflow starts because CI on `main` completed successfully.
 4. CD enters the `staging` environment, copies the archive, migrates, restarts Node.js, and smoke-tests.
 5. On deploy failure, rollback points `current` at the previous directory and a `ci-failure` issue is opened or updated.

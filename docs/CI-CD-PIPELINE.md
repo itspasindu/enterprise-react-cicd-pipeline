@@ -35,7 +35,7 @@ Package Release waits until both Test Full Stack and Security Full Stack succeed
 
 ### Triggers
 
-| Event | Test | Security | Docker release | Deploy |
+| Event | Test | Security | Release archive | Deploy |
 | --- | --- | --- | --- | --- |
 | PR to `main` | Yes | Yes | No | No |
 | Push to `main` | Yes | Yes | Yes | CD after success |
@@ -72,7 +72,7 @@ End-to-end checks share `src/config/app-contract.js` with the web service. Page 
 
 ### Security
 
-[`reusable-security.yml`](../.github/workflows/reusable-security.yml) audits both lockfiles and runs verified-secret scanning, CodeQL, and Trivy. Actions are pinned to commit SHAs and permissions are least-privilege.
+[`reusable-security.yml`](../.github/workflows/reusable-security.yml) audits both lockfiles and runs verified-secret scanning, CodeQL, and Trivy. TruffleHog runs as a version-pinned native binary with a verified release checksum and scans the checked-out Git history. Trivy also runs as a native binary. CI and CD require no Docker daemon. Actions are pinned to commit SHAs and permissions are least-privilege.
 
 ## Release archive
 
@@ -89,7 +89,7 @@ The API dependencies are installed on the runner with `npm ci --omit=dev`, so th
 
 ### Release bundle
 
-The `release-bundle` artifact contains:
+The `release-bundle` artifact contains an Ed25519-signed `release.tar.gz` and detached signature. The archive contains:
 
 - `release.json` — version, full commit SHA, workflow run id, repository
 - `release-metadata.json` — the same document
@@ -120,7 +120,7 @@ flowchart TD
 
 Deployment steps:
 
-1. Download the CI `release-bundle`.
+1. Validate the successful CI run's repository, workflow, main branch, and event; download `release-bundle`, verify its signature before extraction, and bind release metadata to the source run and commit. See [signing setup and provenance policy](RELEASE.md#signing-setup-required-before-the-next-release).
 2. Enter the `staging` GitHub Environment.
 3. Optionally connect the runner with Tailscale.
 4. Verify the pinned SSH host key.
@@ -132,7 +132,7 @@ Deployment steps:
 10. Restart the API. It listens on port 4173 and serves both the web files and `/api`.
 11. Smoke-test `/`, `/about`, `/contact`, `/api/health`, and `/api/ready`.
 
-CD does not check out the application repository. PostgreSQL is already running on the host. Rollback does not restart or restore it.
+CD preparation checks out trusted verification scripts from `main`; deployment uses the verified artifact. PostgreSQL is already running on the host. Rollback does not restart or restore it.
 
 ### What stays on the host
 
@@ -157,7 +157,7 @@ CI and CD call `scripts/create-failure-ticket.sh`. Issue stages include:
 
 - Full-Stack Tests
 - Security Analysis
-- Web & API Container Release
+- Release Archive
 - Host Deployment
 
 Issues include direct run links, stage labels, reproduction guidance, and deduplication. The existing `Developer Fix Choice` workflow remains available for approved lint/format fixes or manual remediation.
@@ -168,7 +168,7 @@ Issues include direct run links, stage labels, reproduction guidance, and dedupl
 
 | Artifact | Producer | Purpose |
 | --- | --- | --- |
-| `web-dist` | tests | exact web build consumed by the image release |
+| `web-dist` | tests | exact web build consumed by the release archive |
 | `web-coverage` | tests | web unit-test coverage |
 | `playwright-report` | tests | traces/screenshots/report |
 | `release-bundle` | release archive | web files, API, checksums, deploy scripts |

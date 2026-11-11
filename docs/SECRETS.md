@@ -51,3 +51,7 @@ API process configuration is validated in `server/src/config.js`. Set `DATABASE_
 | `WIKI_TOKEN` | Replace the secret and revoke the old token. No redeploy is required. |
 
 CD passes `POSTGRES_PASSWORD` to the VM as base64 over SSH. It is not printed in the deploy script's release summary. Treat Actions logs as sensitive anyway.
+
+## Release signing
+
+Before running the updated release workflow, configure the `release-signing` GitHub Environment with deployment restricted to `main`. Add its environment secret `RELEASE_SIGNING_PRIVATE_KEY` (Ed25519 private PEM). Add the matching repository Actions variable `RELEASE_SIGNING_PUBLIC_KEY` (public PEM). Follow [the signing setup guide](RELEASE.md#signing-setup-required-before-the-next-release). Missing keys block release and deployment; unsigned older archives are rejected.

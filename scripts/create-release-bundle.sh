@@ -52,6 +52,7 @@ chmod 0755 "${OUT}/deploy-release.sh" "${OUT}/rollback-release.sh" "${OUT}/healt
 
 export VERSION GITHUB_SHA GITHUB_REPOSITORY CREATED_AT
 export GITHUB_RUN_ID="${GITHUB_RUN_ID:-}"
+export GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 export OUT_JSON="${OUT}/release.json"
 export OUT_META="${OUT}/release-metadata.json"
 node --input-type=module -e '
@@ -61,6 +62,7 @@ node --input-type=module -e '
     commit: process.env.GITHUB_SHA,
     createdAt: process.env.CREATED_AT,
     workflowRunId: process.env.GITHUB_RUN_ID || "",
+    workflowRunAttempt: process.env.GITHUB_RUN_ATTEMPT,
     repository: process.env.GITHUB_REPOSITORY,
     directoryName: `${process.env.VERSION}-${process.env.GITHUB_SHA}`,
     runtime: "host-node",
