@@ -66,7 +66,7 @@ function Home() {
             CI/CD dashboard
           </p>
           <h1 className="relative text-4xl md:text-6xl font-extrabold mb-5 text-slate-900 tracking-tight leading-[1.08]">
-            Is the release <span className="text-gradient">healthy?</span>
+            Is the release <span className="text-gradient">healthy or failed?</span>
           </h1>
           <p className="relative text-lg md:text-xl text-slate-600 max-w-2xl mx-auto mb-9 leading-relaxed">
             See build results, safety checks, and website health in plain language — so anyone on

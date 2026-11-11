@@ -39,11 +39,14 @@ COMMIT="$(jq -er '.commit' "${RELEASE_DIR}/release.json")"
 NAME="${VERSION}-${COMMIT}"
 DEST="${DEPLOY_ROOT}/releases/${NAME}"
 
-mkdir -p "${DEPLOY_ROOT}/releases"
+mkdir -p "${DEPLOY_ROOT}/releases" "${DEPLOY_ROOT}/lib"
 if [ ! -d "$DEST" ]; then
   mkdir -p "$DEST"
   tar -C "$RELEASE_DIR" -cf - . | tar -C "$DEST" -xf -
 fi
+
+# A previous incomplete copy must not be reused as an intact release.
+(cd "$DEST" && sha256sum -c "${RELEASE_DIR}/checksums.txt")
 
 CURRENT_LINK="${DEPLOY_ROOT}/current"
 if [ -L "$CURRENT_LINK" ] || [ -d "$CURRENT_LINK" ]; then

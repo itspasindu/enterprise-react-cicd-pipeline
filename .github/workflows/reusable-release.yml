@@ -9,6 +9,7 @@ jobs:
   release:
     name: Build Release Archive
     runs-on: ubuntu-latest
+    environment: release-signing
     permissions:
       contents: read
       actions: read
@@ -52,15 +53,25 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: bash scripts/create-release-bundle.sh
+      - name: Sign release archive
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
+          RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p signed-release
+          tar -C release -czf signed-release/release.tar.gz .
+          node scripts/release-trust.mjs sign signed-release/release.tar.gz
+          node scripts/release-trust.mjs verify signed-release/release.tar.gz
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-bundle
-          path: release/
+          path: signed-release/
           retention-days: 14
           include-hidden-files: true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ steps.meta.outputs.version }}-${{ github.sha }}
-          path: release/
+          path: signed-release/
           retention-days: 30
           include-hidden-files: true

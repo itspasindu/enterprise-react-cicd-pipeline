@@ -46,7 +46,7 @@ grep -q 'replace_unwritable "${DEPLOY_ROOT}/previous-release.json"' "${ROOT}/scr
 test -x "${WORK}/release/deploy-release.sh"
 test -f "${WORK}/release/lib/host-process.sh"
 
-if grep -RIn --include='*.yml' -E 'docker |docker compose|reusable-docker|image: postgres' "${ROOT}/.github/workflows"; then
+if grep -RIn --include='*.yml' -E 'docker |docker compose|reusable-docker|image: postgres|uses: trufflesecurity/trufflehog@' "${ROOT}/.github/workflows"; then
   echo "A workflow still runs Docker" >&2
   exit 1
 fi
