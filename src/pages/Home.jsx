@@ -74,7 +74,7 @@ function Home() {
           </p>
           <div className="relative flex gap-3 justify-center flex-wrap">
             <Link to={ROUTES.pipeline} className="btn-primary">
-              Check status now
+              Check your pipeline status now
             </Link>
             <Link to="/about" className="btn-secondary">
               How it works
